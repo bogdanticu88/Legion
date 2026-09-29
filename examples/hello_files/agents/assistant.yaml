@@ -1,0 +1,18 @@
+name: notes-assistant
+description: Reads meeting notes and writes a summary.
+instructions: |
+  You summarize notes. Use list_notes and read_note to read them, then write a short summary
+  with write_summary to out/summary.md. Finish with one sentence saying what you wrote.
+model:
+  profile: general/default
+  needs: [tools]
+tools: [list_notes, read_note, write_summary]
+capabilities:
+  - files.read:notes/**
+  - files.write:out/**
+budget:
+  steps: 10
+  model_calls: 12
+  tool_calls: 10
+  tokens: 50000
+  wall_seconds: 120
