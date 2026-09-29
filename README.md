@@ -16,13 +16,17 @@ does is sit between the model and the tools:
   parent's budget, never more.
 - MCP servers can supply tools, but only the ones the operator pinned, and they go through the
   same checks.
+- A tool's credential can come from a credential authority, issued for that one call. Legion asks
+  for exactly what the call was authorized for, refuses a credential that can do more, and records
+  how much it actually knows about each credential (see below).
 
 It doesn't care which model you use or what the agent is for. What it can't control is what a
 tool does once it runs, or what a remote server's own credentials allow; see
 [THREAT_MODEL.md](THREAT_MODEL.md).
 
-Status: early (Phase 4 of 8, see [the roadmap](docs/roadmap.md)). Children run one at a time. MCP
-servers work for tools only. I wouldn't point it at anything that matters.
+Status: early (Phase 5A, see [the roadmap](docs/roadmap.md)). Children run one at a time. MCP
+servers work for tools only. There's no production credential authority yet. I wouldn't point it
+at anything that matters.
 
 ## Why I'm building it
 
@@ -110,6 +114,42 @@ uv run legion resume <run-id>          # paused: call w1 may or may not have tak
 uv run legion reconcile <run-id> w1 --outcome applied --note "file is there"
 uv run legion resume <run-id>
 ```
+
+### Credentials
+
+Three things are kept apart: who is acting (identity), what the task's grant allows (logical
+authority), and what the credential a tool uses can actually do downstream (credential authority).
+A credential in `legion.yaml` is either a static secret reference, which is the same for every call
+and recorded as `unverified`, or a mapping onto a credential authority:
+
+```yaml
+credentials:
+  github:
+    authority: local
+    provider: github
+    permissions: {repo.read: [contents:read], repo.issue.create: [issues:write]}
+    max_lifetime_s: 300
+    minimum: bound
+credential_authorities:
+  local: {module: authorities.py, trusted: true}
+```
+
+For each call Legion asks the authority for exactly the mapped permissions on the call's resource,
+bound to that call and grant, and checks the answer. Something wider, for another principal, call
+or grant, too long-lived, or already used is refused. Legion decides the assurance (`unverified`,
+`declared`, `verified`, `bound`); an authority saying "verified" doesn't count. A minimum can be
+required globally, per credential or by a policy rule, and it's never lowered: if it can't be met,
+the call doesn't run. `legion credentials <run-id>` shows what was asked, what the evidence showed
+and why each credential was accepted or refused.
+
+```bash
+uv run python examples/credential_demo.py    # eight cases, local, no API key
+```
+
+This covers native tools. MCP servers hold their own credential for the whole process, so an MCP
+call is `declared` or `unverified` at best, and a stricter requirement refuses it. NIA is meant to
+be the real authority; what it would need is in
+[docs/nia-integration-requirements.md](docs/nia-integration-requirements.md).
 
 ### MCP servers
 
@@ -205,11 +245,21 @@ can rewrite it or add to it. The log is tamper-evident against edits, not tamper
 ## Known limitations
 
 - Children run one at a time; the parent waits. Several at once is the next step.
-- A child's tools come from its own spec. Capabilities bound them, but if a tool uses a stronger
-  credential under the same capability name, delegation doesn't narrow that credential.
+- A static `env:` credential has whatever authority the secret has, for every call, parent or
+  child; Legion records it as `unverified`. Only a credential mapped to a trusted credential
+  authority is issued per call and checked against the call (ADR 0019), and Legion ships no
+  production authority yet, NIA included.
+- Credential assurance is what the trusted authority says, checked against the request. Legion
+  can't see what the downstream system does with the credential, and nothing is signed, so it also
+  trusts the channel to the authority.
+- Legion checks identity and credential state immediately before a call is dispatched, not at the
+  moment the downstream system uses the credential. A revocation or kill in between isn't seen
+  until the next check, and a call that already started isn't undone.
+- MCP credentials aren't issued per call; an MCP call is never more than `declared`.
 - A child's wall time is only recorded when it ends, so a child that pauses or crashes gets its
   full time again each stretch (still inside the root's time limit).
-- Approvers are whoever runs the CLI as the local OS user. Nothing is signed.
+- Approvers are whoever runs the CLI as the local OS user. Nothing is signed, and there's no
+  approver authentication; what it would need is in the NIA requirements (section B).
 - One machine. Locks are OS file locks next to the store.
 - After a crash, calls declared `pure`, `read` or `write_idempotent` are run again; `write` and
   `external_irreversible` calls that may have happened wait for an operator. It doesn't promise
@@ -246,9 +296,9 @@ can rewrite it or add to it. The log is tamper-evident against edits, not tamper
 
 ## Demos
 
-[docs/demos.md](docs/demos.md) lists five small demonstrations (injection vs grant, approval
-binding, crash mid-write, delegation limits, hostile MCP server). `uv run pytest -m demo -v` runs
-them; none needs an API key.
+[docs/demos.md](docs/demos.md) lists the demonstrations (injection vs grant, approval binding,
+crash mid-write, delegation limits, hostile MCP server, and eight credential cases).
+`uv run pytest -m demo -v` runs them; none needs an API key.
 
 ## Roadmap
 

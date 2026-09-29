@@ -87,7 +87,7 @@ and decimals as strings.
 | `model.requested` | `attempt`, `provider`, `model`, `message_count`, `tool_names`, `request_hash`, `max_output_tokens` | before each attempt. The request itself isn't stored since it comes from the transcript; the hash lets you compare two requests. Resume doesn't use it |
 | `model.responded` | `attempt`, `message`, `stop_reason`, `usage`, `cost_usd`, `latency_ms` | `message` is stored in full. `usage` has `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` |
 | `model.failed` | `attempt`, `error_code`, `message`, `disposition`, `will_retry`, `retry_in_ms` | |
-| `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope` and, if the identity service reported one, `credential_evidence` (`source`, `subject`, `scopes`, `verified`) |
+| `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope`, `credential_assurance` (`declared` if a scope was written, otherwise `unverified`) and, if the identity service reported one, `credential_evidence` (`source`, `subject`, `scopes`, `claimed_verified`) |
 | `action.refused` | `call_id`, `tool`, `action_hash`, `reason_code`, `message` | the model gets `message`. `action_hash` is null if the call was refused before it became an Action |
 | `action.repeated` | `call_id`, `tool`, `repeat_key`, `count` | third or later identical call |
 | `action.authorized` | `call_id`, `action_hash`, `reasons` | grant, policy and external check all passed |
@@ -113,12 +113,14 @@ and decimals as strings.
 | `approval.expired` | `approval_id` | noticed at use, at resume, or when someone tried to decide |
 | `approval.consumed` | `approval_id`, `call_id` | just before the approved call runs |
 | `approval.invalidated` | `approval_id`, `reason` | the call no longer matched what was approved |
+| `credential.resolved` | `call_id`, `action_hash`, `name`, `authority`, `assurance`, `required`, `principal`, `subject`, `grant_id`, `grant_fingerprint`, `provider`, `requested_permissions`, `requested_resource`, `permissions`, `resource`, `credential_ref`, `credential_ref_digest`, `revocation_ref`, `issued_at`, `expires_at`, `widened`, `problems` | a credential for this call, before the last check and `tool.started`. `authority` is `static` for an `env:` secret. `requested_*` is what Legion asked for; `permissions` and `resource` are what the evidence showed (empty when there was no usable evidence). `credential_ref` is the authority's identifier, never the secret; `credential_ref_digest` is what reuse within the run is checked against. Authority-supplied text is scrubbed of known secrets, then cleaned of control and invisible characters and cut to 200 characters |
+| `credential.refused` | same fields | the credential was missing, too weak, wider than the call, expired again, revoked or unknown at the last check, or an MCP server's credential was below the requirement (`authority: server`). Followed by `action.refused` (`credential_refused`). `assurance` is null when the evidence contradicted the request; `widened` says whether it showed more than was asked for |
 
 ## Codes
 
 Refusals: `unknown_tool`, `tool_not_offered`, `invalid_arguments`, `capability_denied`,
 `policy_denied`, `approval_denied`, `approval_expired`, `approval_mismatch`, `approval_reused`,
-`delegation_refused`, `repeated_action`. A veto from the identity service is recorded as
+`delegation_refused`, `repeated_action`, `credential_refused`. A veto from the identity service is recorded as
 `policy_denied`, or `delegation_refused` when it vetoes a child.
 
 Pausing (`disposition: escalate`): `approval_required`, `action_in_doubt`.

@@ -188,6 +188,30 @@ the request's own headers removed before they become errors. What this doesn't c
 under 4 characters, a secret a tool encodes or splits (base64, URL-encoding), a secret the model
 types out that Legion never resolved, and whatever an MCP server writes to its stderr log.
 
+## Credentials for tool calls
+
+A tool that needs a credential names it (`credentials=["github"]`). The name is either a static
+secret reference, recorded as `unverified` on every call, or a mapping onto a credential
+authority (ADR 0019). For a mapped credential Legion builds the request from the authorized
+Action and the operator's mapping only (permissions per capability, the Action's resource, the
+task's identity, the Action hash, call id and Grant fingerprint), asks the authority, and checks
+what comes back. Anything wider than the request is refused. Legion decides the assurance:
+`unverified`, `declared` (untrusted authority), `verified` (trusted authority) or `bound`
+(trusted, and bound to this call and Grant). The required level is the highest of
+`credential_policy.minimum`, the mapping's `minimum` and any matching policy rule's
+`credential_assurance`; it's never lowered, and an MCP call is held to it too. Credentials are
+issued after the budget charge and a kill check; then, immediately before `tool.started`, each one
+is checked for expiry and with the authority for revocation, and the kill state is checked again.
+An expired credential is replaced (once before a call starts, or before a safe retry); a revoked
+one, or one the authority can't vouch for, refuses the call. Each decision is recorded as
+`credential.resolved` or `credential.refused` without the secret, and
+`legion credentials <run-id>` shows them.
+
+The check before dispatch is the last one Legion makes. What happens between it and the downstream
+system using the credential isn't something Legion can see; ADR 0019 describes that window. Legion
+has no production authority yet; NIA is meant to be one, and
+[docs/nia-integration-requirements.md](docs/nia-integration-requirements.md) says what it lacks.
+
 ## Identity (NIA and MIA)
 
 Legion only enforces inside a single run. Identity, issuing credentials, per-agent grants, kill
@@ -201,7 +225,7 @@ default `NullIdentityPort` never kills and never vetoes.
 | `credential(agent_ref, purpose)` | `POST /agents/{ref}/credentials` | token exchange |
 | `on_delegation(parent, child)` | register the child with a subset of grants | `mandates.delegate` |
 | `evidence(action_hash)` | incidents, audit | audit |
-| `credential_evidence(server)` | which credential an MCP server holds | - |
+| `credential_evidence(server)` | a claim about the credential an MCP server holds | - |
 
 An action runs only if both Legion's grant and the external service allow it. The kill check
 covers the task's own identity and every ancestor's, so killing an agent stops everything it

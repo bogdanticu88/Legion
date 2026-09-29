@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Phase 5A
+
+- A `CredentialAuthority` port, separate from `IdentityPort`, issues a credential per call from
+  an operator mapping (capability to provider permissions). Legion builds the request from the
+  authorized Action, checks the evidence that comes back and decides the assurance: `unverified`,
+  `declared`, `verified` or `bound`. Anything wider than the request is refused.
+- Credentials are now resolved after the budget charge and a second kill check, just before the
+  tool starts, and recorded as `credential.resolved` or `credential.refused` (never the secret).
+- Static `env:` credentials keep working and are recorded as `unverified`;
+  `credential_policy.minimum` can refuse them. MCP provenance records `credential_assurance`.
+- Policy rules can set `credential_assurance`; the requirement is the highest of the global
+  minimum, the mapping and matching rules, and failing to meet it refuses the call. MCP calls
+  are held to it too, with the server's credential counting as declared or unverified.
+- Before every attempt, including retries, a held credential is checked: identity not killed,
+  inside its lifetime, still active at the authority. An expired one is replaced; a revoked one
+  refuses the call. A credential that expires just before the call starts is replaced once.
+- Just before dispatch, and before every retry: each credential is checked for expiry and with its
+  authority for revocation, then the kill state once more. Unknown or unreachable counts as not
+  active. A refused credential is revoked and its secret still scrubbed.
+- Evidence is bounded and cleaned before it's recorded; the whole life of a credential, not only
+  what's left, has to fit the maximum lifetime; bound credentials are tied to the call id as well
+  as the Action hash and Grant.
+- `credential.resolved`/`credential.refused` record principal, Grant, requested and evidenced
+  authority, times, references and whether the evidence was wider. `legion credentials <run-id>`
+  shows them.
+- `examples/credential_demo.py` (eight cases), `docs/nia-integration-requirements.md` (the
+  credential-authority contract, designs for authenticated approvals and external checkpoints, NIA
+  gap analysis and Phase 5B options).
+- `IdentityPort.credential()` removed (it was never called). The MCP server credential claim is
+  `ServerCredentialClaim`, and its `verified` field is now `claimed_verified`.
+
 ### Before Phase 5
 
 - The distribution is now called `legion-runtime`, because `legion` on PyPI is an unrelated
