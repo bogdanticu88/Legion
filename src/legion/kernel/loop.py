@@ -133,6 +133,9 @@ class AgentLoop:
                     canonical_json(response.message.model_dump(mode="json"))
                 except ValueError as exc:
                     raise MalformedModelResponse(f"response cannot be recorded: {exc}") from exc
+                if not response.message.text.strip() and not response.message.tool_calls:
+                    # seen with small local models; an empty turn isn't an answer
+                    raise MalformedModelResponse("model returned an empty response")
             except LegionError as exc:
                 retry = exc.disposition is Disposition.RETRYABLE and (
                     attempt < self.k.retry.max_attempts

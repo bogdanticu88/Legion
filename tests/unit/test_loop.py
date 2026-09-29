@@ -233,3 +233,20 @@ async def test_deadline_without_wall_clock_limit() -> None:
         deadline=datetime.now(UTC) + timedelta(milliseconds=200),
     )
     assert outcome.error_code == "deadline_exceeded"
+
+
+async def test_empty_response_is_retried_not_accepted() -> None:
+    from legion.domain.messages import Message
+
+    empty = ModelResponse(
+        message=Message(role="assistant", parts=()), stop_reason=StopReason.END, usage=usage(1)
+    )
+    h = build([empty, reply("real answer")])
+    outcome = await h.run()
+    assert outcome.output == "real answer"
+    [failed] = await h.payloads(outcome.run_id, E.MODEL_FAILED)
+    assert failed["error_code"] == "malformed_model_response"
+
+    h = build([empty, empty, empty])
+    outcome = await h.run()
+    assert outcome.error_code == "malformed_model_response"
