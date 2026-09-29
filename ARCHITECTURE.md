@@ -56,11 +56,13 @@ The types worth knowing:
 5. grant covers the required capabilities
 6. policy
 7. external authority (`IdentityPort.authorize`)
-8. approval, if policy asked for one: request it and pause, or check and consume a granted one
-9. credentials resolved
-10. tool-call budget
-11. kill check again, then run with timeout and retries
-12. output schema, secret redaction, size limit
+8. for `delegate`: the delegation check (child agent, attenuation, budget, depth, fan-out)
+9. approval, if policy asked for one: request it and pause, or check and consume a granted one
+10. credentials resolved
+11. tool-call budget
+12. kill check again, then run with timeout and retries (for `delegate`: the identity service may
+    veto, then the child is made and runs)
+13. output schema, secret redaction, size limit
 
 Each step writes events. There are no hooks between steps. The extension points are the things
 the steps call (policy, identity port, credential resolver).
@@ -91,11 +93,9 @@ never match.
 The run's root grant is whatever the agent asks for, as long as the operator listed it under
 `authority.grantable`.
 
-`Grant.attenuate` is the rule for delegation: a child can't get more capabilities, bigger limits
-or a later expiry than its parent. I built and tested it before delegation itself (Phase 3) so
-the rule is settled first. Two gaps remain for Phase 3: it compares the child with the parent's
-limits rather than with what the parent has left, and it doesn't derive the child's identity from
-the parent.
+`Grant.attenuate` is the only way to make a child grant. It refuses anything wider than the
+parent (capabilities, limits, expiry, delegation depth and fan-out) and derives the child's
+identity itself. Delegation is described below and in ADR 0016.
 
 ## Policy
 
@@ -175,7 +175,9 @@ default `NullIdentityPort` never kills and never vetoes.
 | `on_delegation(parent, child)` | register the child with a subset of grants | `mandates.delegate` |
 | `evidence(action_hash)` | incidents, audit | audit |
 
-An action runs only if both Legion's grant and the external service allow it. NIA can also sit in
+An action runs only if both Legion's grant and the external service allow it. The kill check
+covers the task's own identity and every ancestor's, so killing an agent stops everything it
+delegated to. NIA can also sit in
 front of the tools as a gateway (`POST /tools/{tool}/call` or `/mcp`), which means someone who gets
 around Legion still has to get past NIA. For now only the interface and the null version exist.
 
@@ -206,11 +208,24 @@ to the last event of a crashed stretch is.
 A run is driven by one process at a time, enforced with an OS file lock next to the store
 (ADR 0015).
 
-## Delegation (Phase 3)
+## Delegation
 
-A built-in `delegate` tool will start a child task with a narrower grant and a slice of the
-parent's remaining budget, with limits on depth, fan-out and concurrency. Extra authority for a
-child can only come from outside (a human, NIA or MIA), never from the model.
+An agent can hand a sub-task to another agent with the built-in `delegate` tool. It's an
+ordinary call as far as the pipeline is concerned: it needs `agent.delegate:<agent name>`, policy
+and the external authority are asked, and it can require approval. Before approval there's a
+delegation check: the child agent exists in the catalog (`agents_dir`), its capabilities are
+within the parent's grant and its own spec, it gets no more budget than the parent has left, depth
+and fan-out allow it, and the run is under its task cap. The identity service gets a chance to
+veto (`IdentityPort.on_delegation`). Then the child is made.
+
+A child is a task in the same run, with its own grant, identity, transcript and budget. It sees
+only the objective and context it was given. Its steps, calls, tokens and cost are reserved from
+the parent while it runs and settled when it ends (ADR 0017). The parent gets a structured result,
+not the child's conversation. A child that needs a person pauses the whole run; a child that fails
+returns a failed result; a killed ancestor stops the subtree. Children run one at a time for now.
+Details in ADR 0016.
+
+`legion tasks <run-id>` shows the tree.
 
 ## Tools
 

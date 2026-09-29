@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Phase 3
+
+- Delegation: the built-in `delegate` tool makes a child task that runs under a narrower grant.
+  Capabilities must be within the parent's grant and the child agent's spec; limits come out of
+  what the parent has left and are reserved, then settled when the child ends; depth, fan-out
+  and tasks per run are capped; identity is derived by the harness.
+- Children share the run's log, lock and resume. A child that needs approval or has a write in
+  doubt pauses the run; other failures come back to the parent as a result. Killing an ancestor
+  stops the subtree. Children run one at a time.
+- `legion tasks` shows a run's task tree. `legion.yaml` gets `agents_dir`,
+  `authority.max_delegation_depth` and `authority.max_tasks`. The starter project has a
+  coordinator agent.
+- An empty model response is now treated as malformed (seen with qwen2.5:1.5b on Ollama).
+- Tests: delegation attenuation, budget, limits, identity, approvals, crashes and cancellation;
+  property tests over random delegation trees, with and without crashes.
+
 ### Phase 2
 
 - `legion resume` continues a paused or crashed run from its event log, through the same loop and

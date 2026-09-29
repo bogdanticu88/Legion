@@ -34,6 +34,9 @@ and decimals as strings.
   error ends the run in the middle of a call (loop, expired grant, missing credential, budget,
   kill), the call doesn't get its own ending. `task.failed` covers it, preceded by
   `action.in_doubt` if the tool had started.
+- A child's `task.created`, its `budget.reserved` events and the parent's `task.waiting` are
+  written in one append. Its settlement and the parent's `task.resumed` come after the child's
+  last event and before the parent's `tool.completed` for the delegate call.
 - A call can be proposed more than once (after a pause or crash). It's still one call: same
   `call_id`, and repeat detection counts it once.
 - For a call that needed approval, `approval.consumed` comes before its `action.authorized` and
@@ -62,7 +65,7 @@ and decimals as strings.
 | `run.completed` | `output` | root task finished |
 | `run.failed` | `error_code`, `message`, `disposition` | a fatal error ended the run |
 | `run.cancelled` | `reason` | the asyncio task was cancelled |
-| `task.created` | `task`, `grant_id`, `agent` | `task` is the full spec |
+| `task.created` | `task`, `grant_id`, `agent`, and for a child: `grant`, `agent_spec`, `provider`, `model`, `delegated_by` | `task` is the full spec. A child's `parent_task_id` is set and `delegated_by` is the parent's call id |
 | `task.started` | | loop begins |
 | `task.completed` | `output`, `structured`, `truncated` | model answered without tool calls and the answer was accepted |
 | `task.failed` | `error_code`, `message`, `disposition` | |
@@ -81,6 +84,9 @@ and decimals as strings.
 | `budget.consumed` | `grant_id`, `dimension`, `amount`, `total` | anything charged |
 | `budget.exceeded` | `grant_id`, `dimension`, `limit`, `attempted` | a limit stopped the run |
 | `output.rejected` | `attempt`, `reason` | final answer didn't match the agent's output schema |
+| `task.waiting` | `child_task_id` | a parent is waiting for a child |
+| `budget.reserved` | `grant_id`, `child_grant_id`, `child_task_id`, `dimension`, `amount` | a child's share, held from the parent while the child runs |
+| `budget.settled` | `grant_id`, `child_grant_id`, `child_task_id`, `dimension`, `reserved`, `used` | the child ended; the reservation is released and `used` is charged to the parent |
 | `run.paused` | `reason` (`approval` or `reconciliation`), `approval_id`, `call_id` | the run is waiting for a person |
 | `run.resumed` | `by`, `previous_status`, `config_hash` | `legion resume`; `previous_status` is `running` if the process had crashed |
 | `task.awaiting_approval` | `approval_id` | |
@@ -98,7 +104,7 @@ and decimals as strings.
 
 Refusals: `unknown_tool`, `tool_not_offered`, `invalid_arguments`, `capability_denied`,
 `policy_denied`, `approval_denied`, `approval_expired`, `approval_mismatch`, `approval_reused`,
-`repeated_action`.
+`delegation_refused`, `repeated_action`.
 
 Pausing (`disposition: escalate`): `approval_required`, `action_in_doubt`.
 

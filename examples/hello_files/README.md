@@ -16,5 +16,8 @@ writes `workspace/out/summary.md`.
 `agents/publisher.yaml` shows approvals: publishing can't be undone, so the run pauses until you
 `legion approve` it, then `legion resume` finishes it.
 
+`agents/coordinator.yaml` hands the job to `notes-assistant` with `delegate`; `legion tasks
+<run-id>` shows the two tasks and how the budget was split.
+
 There's nothing security-specific in here. Any agent works the same way as long as its tools
 declare their effects and capabilities.

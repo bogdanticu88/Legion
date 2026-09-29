@@ -15,12 +15,13 @@ Each phase should leave the repo working, tested and documented.
 | 0 | Framework notes, architecture, ADRs, threat model |
 | 1 | One agent per run. Scripted, OpenAI-compatible and Anthropic providers. Native tools, the action pipeline, grants, policy, budgets, SQLite event log with hash chain, retries, repeat detection. CLI: `init`, `providers`, `agent validate`, `run`, `runs`, `inspect`, `verify` |
 | 2 | Resume from the log after a pause or crash. Effect-aware handling of interrupted calls, operator reconciliation for in-doubt writes. Approvals bound to one call, single use, with expiry. Per-run file locks. CLI: `resume`, `approvals`, `approval show`, `approve`, `deny`, `reconcile` |
+| 3 | Delegation. A `delegate` tool that makes a child task under a narrower grant with budget reserved from the parent; depth, fan-out and task limits; derived child identity; results returned as summaries; pause, resume, crash recovery and approvals across the task tree. CLI: `tasks`. Children run one at a time |
 
 ## Next
 
 | Phase | What | Done when |
 |---|---|---|
-| 3 | Host and specialists. A `delegate` tool that starts a child task under a narrower grant with a slice of the parent's remaining budget. Parallel children, cancellation, limits on depth, fan-out and concurrency. Resume and approvals working per task | Property tests show no child ever holds a capability or budget its parent lacked, and total spend never goes over the root budget, including across crashes |
+| 3b | Several children at once. Budget reservations already make this safe on paper; what's missing is running them concurrently, cancelling siblings when one fails, and ordering their events | Property tests over random concurrent trees; a crash with three children mid-flight resumes all three without duplicates |
 | 4 | Governed plans. The host writes its plan as a recorded object; a person can approve the plan once, and the harness refuses steps that fall outside it | A step outside the approved plan is refused; changing the plan needs a new approval |
 | 5 | Built-in specialist agents (research, code, and the security-operations set) and a second, non-security example | The same host runs both examples without core changes |
 | 6 | Memory with provenance. Remembered facts record where they came from; anything that came from untrusted input is marked and can't quietly steer later runs | A fact from tool output can't be used as an instruction without being labelled |

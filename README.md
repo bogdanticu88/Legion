@@ -6,11 +6,12 @@ anything happens. Risky actions wait for a person to approve that exact action. 
 written to an append-only, hash-chained event log, and runs can be resumed from it after a pause
 or a crash without repeating anything that may already have happened.
 
-It doesn't care which model you use or what the agent is for. Where it's heading is a host agent
-that hands work to specialist agents, each with narrower permissions and a share of the budget.
+It doesn't care which model you use or what the agent is for. An agent can hand parts of a job
+to other agents; each child gets narrower permissions and a share of its parent's budget, never
+more.
 
-Status: early (Phase 2 of 8, see [the roadmap](docs/roadmap.md)). One agent per run, no MCP, no
-delegation yet. I wouldn't point it at anything that matters.
+Status: early (Phase 3 of 8, see [the roadmap](docs/roadmap.md)). Children run one at a time, no
+MCP yet. I wouldn't point it at anything that matters.
 
 ## Why I'm building it
 
@@ -66,6 +67,27 @@ uv run legion resume <run-id>
 explanation marked as untrusted. The approval covers that one call and nothing else: a different
 channel, different text, a second identical call or changed settings all need a new approval.
 
+### Delegation
+
+The coordinator agent hands the notes job to the assistant:
+
+```bash
+uv run legion run agents/coordinator.yaml "Get the notes summarised"
+uv run legion tasks <run-id>
+```
+
+```
+ task                    agent        status     via call   tool calls  model calls
+ task_1caa41b055074170   coordinator  completed  -          5/16        8/24
+   task_44554b07c47079ec notes-assis… completed  call_1_1   4/8         6/12
+```
+
+The child only got the objective and a small context, not the coordinator's conversation. Its
+grant is whatever the coordinator held, narrowed to what the assistant's spec asks for, and its 8
+tool calls came out of the coordinator's 16. The coordinator's 5 is its own delegate call plus
+the child's 4. A child can't be given a capability its parent doesn't have, can't be given more
+budget than the parent has left, and can't delegate deeper than the parent allows.
+
 ### After a crash
 
 If the process dies, `legion resume <run-id>` picks up from the log. Reads and other safe calls
@@ -95,9 +117,9 @@ ModelProvider (OpenAI-compatible, Anthropic, scripted)
 ```
 
 Every tool call becomes an `Action` and goes through `ActionPipeline`: kill check, lookup, schema,
-repeat check, grant, policy, external authority, approval, credentials, budget, run with timeout,
-output checks. There's no other way for a tool to run, and a resumed run goes through the same
-steps.
+repeat check, grant, policy, external authority, delegation check, approval, credentials, budget,
+run with timeout, output checks. There's no other way for a tool to run. Delegating to another
+agent is a tool call too, and a resumed run goes through the same steps.
 
 More in [ARCHITECTURE.md](ARCHITECTURE.md), the decisions in [docs/adr/](docs/adr/), and the
 event format in [docs/events.md](docs/events.md).
@@ -152,7 +174,11 @@ whoever can write the event store can rewrite it or add to it.
 
 ## Known limitations
 
-- One agent per run. Delegation is next (Phase 3).
+- Children run one at a time; the parent waits. Several at once is the next step.
+- A child's tools come from its own spec. Capabilities bound them, but if a tool uses a stronger
+  credential under the same capability name, delegation doesn't narrow that credential.
+- A child's wall time is only recorded when it ends, so a child that pauses or crashes gets its
+  full time again each stretch (still inside the root's time limit).
 - Approvers are whoever runs the CLI as the local OS user. Nothing is signed.
 - One machine. Locks are OS file locks next to the store.
 - Legion never automatically repeats an action that may have happened. It doesn't promise
@@ -166,14 +192,14 @@ whoever can write the event store can rewrite it or add to it.
 - The token budget caps a call's output but not its input. Cost is checked after each call.
 - The hash chain catches edited or missing events but not events cut off the end.
 - No MCP, streaming or images. The operator declares what each model supports.
-- Adapters are tested against recorded and generated responses. I haven't run them against a real
-  model yet.
+- The OpenAI-compatible adapter has been run against qwen2.5:1.5b on Ollama. That model is too
+  small to use delegation, so delegation is only tested with scripted and generated model output.
+  The Anthropic adapter hasn't been run against the real API.
 
 ## Roadmap
 
-Next: a host agent with specialists (delegation with narrower grants and carved budgets), then
-plans a person can approve once, built-in specialist agents, memory that remembers where facts
-came from, MCP, and exports plus the NIA identity adapter. Details in
+Next: several children at once, then plans a person can approve once, built-in specialist agents,
+memory that remembers where facts came from, MCP, and exports plus the NIA identity adapter. Details in
 [docs/roadmap.md](docs/roadmap.md).
 
 ## Related projects
