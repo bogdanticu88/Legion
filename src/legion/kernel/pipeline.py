@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from decimal import Decimal
+from typing import Any
 
 import jsonschema
 
@@ -86,6 +87,7 @@ class ActionPipeline:
                 effect=action.effect.value,
                 resource=action.resource,
                 required=[str(c) for c in action.required],
+                remote=await self._remote(tool),
             ),
             correlation={"action_hash": action.hash},
         )
@@ -121,6 +123,23 @@ class ActionPipeline:
         secrets = await self._credentials(tool)
         await self._run(tool, call, action, task, secrets)
         return None
+
+    async def _remote(self, tool: Tool) -> dict[str, Any] | None:
+        # Where a remote tool runs and whose credential it uses there. Recorded for the audit
+        # trail; none of it changes what the grant allows.
+        origin = tool.spec.origin
+        if origin is None:
+            return None
+        remote: dict[str, Any] = dict(origin)
+        evidence = await self.k.identity.credential_evidence(origin.get("server", ""))
+        if evidence is not None:
+            remote["credential_evidence"] = {
+                "source": evidence.source,
+                "subject": evidence.subject,
+                "scopes": list(evidence.scopes),
+                "verified": evidence.verified,
+            }
+        return remote
 
     def _action(self, tool: Tool, call: ToolCallPart, task: TaskRuntime) -> Action:
         spec = tool.spec

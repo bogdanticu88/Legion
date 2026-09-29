@@ -32,6 +32,9 @@ class ToolSpec(BaseModel):
     max_attempts: int = Field(default=2, ge=1, le=5)
     credentials: tuple[str, ...] = ()
     max_output_chars: int = Field(default=20_000, gt=0)
+    # where the tool comes from when it isn't local code, e.g. an MCP server and the pin of the
+    # definition that was reviewed. Part of what an approval is bound to.
+    origin: dict[str, str] | None = None
 
     @model_validator(mode="after")
     def _check(self) -> Self:

@@ -32,6 +32,16 @@ class ExternalDecision:
 
 
 @dataclass(frozen=True)
+class CredentialEvidence:
+    # What an identity service can say about the credential a remote tool server uses. Legion
+    # records it; it doesn't make Legion's grant any narrower downstream.
+    source: str
+    subject: str
+    scopes: tuple[str, ...] = ()
+    verified: bool = False
+
+
+@dataclass(frozen=True)
 class ExternalEvidenceRef:
     source: str
     kind: str
@@ -50,6 +60,8 @@ class IdentityPort(Protocol):
     async def on_delegation(self, parent: Grant, child: Grant) -> None: ...
 
     async def evidence(self, action_hash: str) -> list[ExternalEvidenceRef]: ...
+
+    async def credential_evidence(self, server: str) -> CredentialEvidence | None: ...
 
 
 class NullIdentityPort:
@@ -73,3 +85,6 @@ class NullIdentityPort:
 
     async def evidence(self, action_hash: str) -> list[ExternalEvidenceRef]:
         return []
+
+    async def credential_evidence(self, server: str) -> CredentialEvidence | None:
+        return None

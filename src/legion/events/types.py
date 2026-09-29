@@ -163,6 +163,9 @@ class ActionProposed(_Payload):
     effect: str
     resource: str | None
     required: list[str]
+    # for tools that run elsewhere (MCP): which server, which pinned definition, and what the
+    # operator says the server's own credentials can do
+    remote: dict[str, Any] | None = None
 
 
 # action_hash is None when the call was refused before it became an Action

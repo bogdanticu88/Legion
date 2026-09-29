@@ -84,4 +84,6 @@ def subject(
         "arguments": action.arguments,
         "required": [str(c) for c in action.required],
         "model_note": model_note[:MODEL_NOTE_LIMIT],
+        # for a remote tool: which server runs it and what its own credentials can do
+        "origin": tool.origin,
     }
