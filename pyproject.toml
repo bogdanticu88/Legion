@@ -1,5 +1,5 @@
 [project]
-name = "legion"
+name = "legion-runtime"
 version = "0.1.0.dev0"
 description = "A small agent runtime where every effect passes one enforcement path and authority only narrows."
 readme = "README.md"

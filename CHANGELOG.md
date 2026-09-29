@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Before Phase 5
+
+- The distribution is now called `legion-runtime`, because `legion` on PyPI is an unrelated
+  project. The import package and the `legion` command are unchanged. Nothing is published.
+
 ### Review before Phase 5
 
 - Schemas can't reach outside themselves. jsonschema used to follow a `$ref` to a URL or a

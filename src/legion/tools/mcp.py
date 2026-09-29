@@ -480,7 +480,8 @@ def _clean(text: str) -> str:
 
 def check_servers(servers: Mapping[str, McpServerConfig]) -> None:
     if servers and importlib.util.find_spec("mcp") is None:
-        # not "pip install legion[mcp]": the legion package on PyPI is someone else's project
+        # not "pip install legion[mcp]": the legion package on PyPI is someone else's project, and
+        # legion-runtime isn't published
         raise ConfigError("mcp_servers needs the MCP SDK: run `uv sync --extra mcp`")
     for server_id, config in servers.items():
         config.check(server_id)

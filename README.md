@@ -262,8 +262,9 @@ NIA is my Go control plane for agent identity, credentials and kill switches. MI
 service for delegated mandates. Legion can talk to either through `IdentityPort` (later) but needs
 neither.
 
-Legion isn't published on PyPI. The `legion` package there is an unrelated project, so install
-from this repository (`uv sync`, or `pip install .`).
+The distribution name is `legion-runtime`; the import is `legion` and the command is `legion`.
+Nothing is published on PyPI yet, so install from this repository (`uv sync`, or `pip install .`).
+The `legion` package on PyPI is an unrelated project.
 
 ## Development
 
