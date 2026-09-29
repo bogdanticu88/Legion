@@ -207,6 +207,12 @@ class ActionPipeline:
         # picked up again through the parent's call.
         assert self.k.delegator is not None
         if not plan.existing:
+            # An identity service may veto the child. Ask before anything starts, so a veto is a
+            # clean refusal and not a half-started call someone has to reconcile.
+            try:
+                await self.k.identity.on_delegation(task.grant, plan.grant)
+            except LegionError as exc:
+                return await self._refuse(task, call, DelegationRefused(exc.message), action)
             # Charged once, when the child is made. Picking an existing child back up after a
             # pause or crash is free; otherwise a child given everything the parent had left
             # could never be resumed.

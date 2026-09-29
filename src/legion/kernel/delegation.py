@@ -312,7 +312,6 @@ class Delegator:
             ledger = k.ledger(parent)
             for dim, amount in plan.reservations:
                 ledger.precheck(dim, amount)
-            await k.identity.on_delegation(parent.grant, plan.grant)
             await k.recorder.append(self._creation(call, parent, plan))
 
         view = k.state.tasks[plan.task_id]

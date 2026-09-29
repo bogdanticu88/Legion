@@ -543,3 +543,20 @@ async def test_delegating_with_one_tool_call_left_is_refused() -> None:
         if p["dimension"] == "tool_calls"
     ]
     assert max(consumed) <= 2
+
+
+class VetoesChildren(NullIdentityPort):
+    async def on_delegation(self, parent: Grant, child: Grant) -> None:
+        from legion.domain.errors import LegionError
+
+        raise LegionError(f"identity service won't register {child.identity.agent_ref}")
+
+
+async def test_identity_service_veto_is_a_clean_refusal() -> None:
+    h = setup([delegate(), reply("carried on")], identity=VetoesChildren())
+    outcome = await h.run(boss())
+    assert outcome.status is RunStatus.COMPLETED and outcome.in_doubt == ()
+    assert "won't register reader" in await refusal(h, outcome.run_id)
+    assert await children(h, outcome.run_id) == []
+    types = await h.types(outcome.run_id)
+    assert E.TOOL_STARTED not in types
