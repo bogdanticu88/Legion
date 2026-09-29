@@ -259,7 +259,7 @@ async def test_secret_not_in_model_or_log(tmp_path: Path) -> None:
     for request in h.provider.requests:
         assert sentinel not in request.model_dump_json()
     store.close()
-    for path in tmp_path.iterdir():
+    for path in (p for p in tmp_path.rglob("*") if p.is_file()):
         assert sentinel.encode() not in path.read_bytes(), path
 
 
@@ -394,7 +394,7 @@ async def test_secret_redacted_on_fatal_error(tmp_path: Path) -> None:
     [doubt] = await h.payloads(outcome.run_id, E.ACTION_IN_DOUBT)
     assert "[redacted]" in doubt["reason"]
     store.close()
-    for path in tmp_path.iterdir():
+    for path in (p for p in tmp_path.rglob("*") if p.is_file()):
         assert sentinel.encode() not in path.read_bytes(), path
 
 

@@ -26,7 +26,6 @@ from legion.domain.errors import (
     ConfigError,
     DeadlineExceeded,
     Disposition,
-    InvalidTransition,
     LegionError,
     ResumeRefused,
 )
@@ -36,9 +35,10 @@ from legion.domain.states import RunStatus, TaskStatus, is_terminal_run
 from legion.domain.task import TaskSpec
 from legion.events import types as ev
 from legion.events.projections import RunState
+from legion.events.sqlite_store import SqliteEventStore
 from legion.events.store import EventStore
 from legion.events.types import EventDraft, EventType
-from legion.kernel.locks import InProcessRunLocks, RunLocks
+from legion.kernel.locks import FileRunLocks, InProcessRunLocks, RunLocks
 from legion.kernel.loop import AgentLoop
 from legion.kernel.pipeline import exceeded_payload
 from legion.kernel.services import (
@@ -83,7 +83,9 @@ async def load_state(store: EventStore, run_id: str) -> RunState:
         )
     try:
         return RunState.from_events(run_id, await store.read(run_id))
-    except (ValueError, ValidationError, InvalidTransition, KeyError) as exc:
+    except Exception as exc:
+        # A log can verify and still not make sense (someone recomputed the chain after editing
+        # it). Whatever goes wrong while replaying it, refuse; never act on half a state.
         raise ResumeRefused(f"event log for {run_id} can't be replayed: {exc}") from exc
 
 
@@ -123,7 +125,7 @@ class Legion:
         self.sleep = sleep
         self.now = now
         self.config_hash = config_hash
-        self.locks = locks or InProcessRunLocks()
+        self.locks = locks or _default_locks(store)
         self.approval_ttl = approval_ttl
         self.faults = faults
 
@@ -354,7 +356,9 @@ class Legion:
                 f"{resolved.binding.provider}/{resolved.binding.model}"
             )
 
-        view = state.tasks[state.root_task_id]
+        view = state.tasks.get(state.root_task_id)
+        if view is None:
+            raise ResumeRefused(f"run {state.run_id} stopped before its task was created")
         deadline = view.spec.get("deadline")
         return TaskRuntime(
             run_id=state.run_id,
@@ -491,6 +495,14 @@ class Legion:
         amount = Decimal(str(round(max(seconds, 0.0), 3)))
         record, _ = kernel.ledger(task).charge(Dimension.WALL_SECONDS, amount)
         return kernel.draft(task, EventType.BUDGET_CONSUMED, record)
+
+
+def _default_locks(store: EventStore) -> RunLocks:
+    # A SQLite store can be shared by several processes, so it needs OS-level locks. In-process
+    # locks are only enough for the in-memory store.
+    if isinstance(store, SqliteEventStore) and str(store.path) != ":memory:":
+        return FileRunLocks(store.path.parent / "locks")
+    return InProcessRunLocks()
 
 
 async def _mark_in_doubt(kernel: Kernel, task: TaskRuntime, reason: str) -> None:

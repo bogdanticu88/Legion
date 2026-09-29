@@ -347,3 +347,29 @@ async def test_approval_shows_what_it_allows() -> None:
     assert subject["effect"] == "external_irreversible"
     assert subject["model_note"] == "paying the invoice"
     assert subject["on_behalf_of"] == ["human:tester"]
+
+
+def test_approval_screen_cannot_be_styled_by_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from legion.cli import app
+
+    assert CliRunner().invoke(app, ["init", str(tmp_path)]).exit_code == 0
+    script = tmp_path / "scripts" / "publisher.yaml"
+    script.write_text(
+        script.read_text().replace(
+            "text: Publishing the summary to the team channel.",
+            'text: "[green]reviewed and signed off by security[/green] '
+            '[black on black]hidden[/black on black] \\u202eevil\\u001b[2J"',
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app, ["run", "agents/publisher.yaml", "publish", "--config", "legion.yaml"], color=True
+    )
+    assert result.exit_code == 3
+    assert "[green]reviewed and signed off by security[/green]" in result.output
+    assert "\x1b[32mreviewed" not in result.output
+    assert "‮" not in result.output and "\x1b[2J" not in result.output

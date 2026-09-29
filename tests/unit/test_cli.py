@@ -150,3 +150,11 @@ def test_symlink_escape_refused(project: Path, monkeypatch: pytest.MonkeyPatch) 
     failed = [json.loads(line) for line in events.splitlines() if '"tool.failed"' in line]
     assert any("goes through a link" in e["payload"]["message"] for e in failed)
     assert "outside the agent's grant" not in events
+
+
+def test_tools_cannot_be_pointed_at_the_state_directory(project: Path) -> None:
+    config = project / "legion.yaml"
+    config.write_text(config.read_text().replace("workspace: workspace", "workspace: ."))
+    code, out = cli(project, "agent", "validate", str(project / "agents" / "assistant.yaml"))
+    assert code == 2
+    assert "state directory" in out

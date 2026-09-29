@@ -4,6 +4,7 @@ import asyncio
 import getpass
 import json
 import os
+import re
 from collections.abc import Coroutine
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -12,6 +13,7 @@ from typing import Annotated, Any, Literal
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Column, Table
 
 from legion.config.loader import Loaded, load_agent, load_config
@@ -38,6 +40,16 @@ ConfigOption = Annotated[
 ]
 
 
+# Anything that came from a run (model text, tool output, arguments, error messages) is untrusted.
+# Rich would treat "[green]approved[/green]" in it as formatting, and terminal control or bidi
+# characters can hide or rearrange text, so all of it goes through _safe before printing.
+_UNSAFE_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def _safe(value: object) -> str:
+    return escape(_UNSAFE_CHARS.sub("?", str(value)))
+
+
 def _run[T](coro: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coro)
 
@@ -46,7 +58,7 @@ def _load(path: Path) -> Loaded:
     try:
         return load_config(path)
     except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
 
 
@@ -103,13 +115,13 @@ def validate(
         agent = load_agent(agent_file)
         legion = loaded.build()
     except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
     errors, warnings = legion.check(agent)
     for warning in warnings:
-        out.print(f"[yellow]warning:[/yellow] {warning}")
+        out.print(f"[yellow]warning:[/yellow] {_safe(warning)}")
     for error in errors:
-        out.print(f"[red]error:[/red] {error}")
+        out.print(f"[red]error:[/red] {_safe(error)}")
     if errors:
         raise typer.Exit(1)
     out.print(
@@ -145,9 +157,9 @@ def _report(outcome: RunOutcome, loaded: Loaded, as_json: bool) -> None:
     else:
         out.print(f"run {outcome.run_id}: {outcome.status.value}")
         if outcome.output:
-            out.print(outcome.output)
+            out.print(_safe(outcome.output))
         if outcome.error_code:
-            out.print(f"[red]{outcome.error_code}[/red]: {outcome.error_message}")
+            out.print(f"[red]{_safe(outcome.error_code)}[/red]: {_safe(outcome.error_message)}")
         if outcome.approval_id:
             out.print("\n[bold]Approval required[/bold]")
             _show_approval(loaded, outcome.approval_id)
@@ -192,7 +204,7 @@ def run(
     try:
         outcome = _run(go())
     except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
     _report(outcome, loaded, as_json)
 
@@ -217,7 +229,7 @@ def resume(
     try:
         outcome = _run(go())
     except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
     _report(outcome, loaded, as_json)
 
@@ -249,12 +261,12 @@ def _show_approval(loaded: Loaded, approval_id: str) -> None:
         rows.append(("decided by", f"{approval.decided_by} {approval.note}".strip()))
     table = Table(show_header=False, box=None)
     for label, value in rows:
-        table.add_row(f"[bold]{label}[/bold]", value)
+        table.add_row(f"[bold]{label}[/bold]", _safe(value))
     out.print(table)
     out.print("[bold]arguments[/bold]")
     out.print_json(json.dumps(s.get("arguments", {}), sort_keys=True))
     if s.get("model_note"):
-        out.print(f"[bold]model says (untrusted)[/bold]\n{s['model_note']}", highlight=False)
+        out.print(f"[bold]model says (untrusted)[/bold]\n{_safe(s['model_note'])}", highlight=False)
     out.print(f"[dim]binding {approval.binding_hash}[/dim]")
 
 
@@ -275,8 +287,8 @@ def approvals(config: ConfigOption = Path("legion.yaml")) -> None:
         table.add_row(
             p.approval.id,
             p.run_id,
-            str(p.approval.subject.get("tool")),
-            str(p.approval.subject.get("resource") or "-"),
+            _safe(p.approval.subject.get("tool")),
+            _safe(p.approval.subject.get("resource") or "-"),
             "[red]expired[/red]" if p.expired else expires,
         )
     out.print(table)
@@ -289,7 +301,7 @@ def approval_show(approval_id: str, config: ConfigOption = Path("legion.yaml")) 
     try:
         _show_approval(loaded, approval_id)
     except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
 
 
@@ -303,7 +315,7 @@ def _decide(approval_id: str, config: Path, *, approve: bool, note: str) -> None
             )
         )
     except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
     finally:
         store.close()
@@ -362,7 +374,7 @@ def reconcile(
             )
         )
     except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
     finally:
         store.close()
@@ -384,7 +396,11 @@ def runs(config: ConfigOption = Path("legion.yaml")) -> None:
     table = Table(Column("run", no_wrap=True, min_width=20), "agent", "created", "status", "events")
     for s in summaries:
         table.add_row(
-            s.run_id, s.agent, s.created_at.isoformat(timespec="seconds"), s.status, str(s.events)
+            s.run_id,
+            _safe(s.agent),
+            s.created_at.isoformat(timespec="seconds"),
+            s.status,
+            str(s.events),
         )
     out.print(table)
 
@@ -412,10 +428,8 @@ def inspect(
             print(json.dumps({**event.body(), "hash": event.hash}, sort_keys=True))
         else:
             time = event.ts.strftime("%H:%M:%S.%f")[:-3]
-            out.print(
-                f"{event.seq:>4} {time} [bold]{event.type.value:<18}[/bold] {describe(event)}",
-                highlight=False,
-            )
+            kind = f"[bold]{event.type.value:<18}[/bold]"
+            out.print(f"{event.seq:>4} {time} {kind} {_safe(describe(event))}", highlight=False)
 
 
 @app.command()

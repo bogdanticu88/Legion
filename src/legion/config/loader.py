@@ -117,7 +117,21 @@ class Loaded:
     def locks(self) -> FileRunLocks:
         return FileRunLocks(self.resolve_path(self.config.store).parent / "locks")
 
+    def check_state_dir(self) -> None:
+        # The event log holds approvals. If a tool can write to it, an agent could append an
+        # approval for itself, so refuse configurations where a tool setting points at a
+        # directory that contains the state directory. It can't see paths tools pick themselves.
+        state_dir = self.resolve_path(self.config.store).parent.resolve()
+        for key, value in self.config.tool_settings.items():
+            candidate = self.resolve_path(value).resolve()
+            if candidate.is_dir() and state_dir.is_relative_to(candidate):
+                raise ConfigError(
+                    f"tool setting {key}={value!r} gives tools access to the state directory "
+                    f"{state_dir}; keep the store outside anything tools can write"
+                )
+
     def build(self, store: SqliteEventStore | None = None) -> Legion:
+        self.check_state_dir()
         env = EnvResolver()
         self.providers = {name: self._provider(p, env) for name, p in self.config.providers.items()}
         tools = ToolRegistry()

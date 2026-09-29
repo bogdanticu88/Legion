@@ -383,7 +383,7 @@ async def test_api_key_not_logged(tmp_path: Path) -> None:
     assert outcome.status is RunStatus.COMPLETED
     assert all(r.headers["x-api-key"] == KEY for r in rec.requests)
     store.close()
-    for path in tmp_path.iterdir():
+    for path in (p for p in tmp_path.rglob("*") if p.is_file()):
         assert KEY.encode() not in path.read_bytes()
 
 

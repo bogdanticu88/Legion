@@ -243,3 +243,31 @@ async def test_file_locks_keep_one_holder(tmp_path: Path) -> None:
 def test_file_locks_reject_odd_run_ids(tmp_path: Path) -> None:
     with pytest.raises(RunLocked), FileRunLocks(tmp_path).hold("../escape"):
         pass
+
+
+async def test_run_that_died_before_its_task_existed_is_refused() -> None:
+    h = build([reply("x")], faults=crash_at("before:task.created"), by_turn=True)
+    with pytest.raises(SimulatedCrash):
+        await h.run()
+    [summary] = await h.store.runs()
+    with pytest.raises(ResumeRefused, match="before its task"):
+        await h.restart().resume(summary.run_id)
+
+
+async def test_log_that_verifies_but_makes_no_sense_is_refused() -> None:
+    from legion.events.store import MemoryEventStore
+    from legion.events.types import Empty, draft
+
+    store = MemoryEventStore()
+    # a correctly chained log whose second event refers to a task that doesn't exist
+    await store.append([draft("run_x", E.RUN_STARTED, Empty())])
+    await store.append([draft("run_x", E.TASK_STARTED, Empty(), task_id="task_ghost")])
+    h = build([reply("x")], store=store)
+    with pytest.raises(ResumeRefused, match="can't be replayed"):
+        await h.resume("run_x")
+
+
+def test_sqlite_store_gets_file_locks_by_default(tmp_path: Path) -> None:
+    h = build([reply("x")], store=SqliteEventStore(tmp_path / "e.db"))
+    assert isinstance(h.legion.locks, FileRunLocks)
+    assert h.legion.locks.directory == tmp_path / "locks"
