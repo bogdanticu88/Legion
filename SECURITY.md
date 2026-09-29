@@ -15,7 +15,10 @@ rather I didn't.
 - Secret values ending up in the prompt, events, artifacts or logs
 - Changes to the event log that `legion verify` misses (other than rewriting the whole chain from
   the host)
-- Reusing an approval, or one approval being accepted for a different action (from Phase 2)
+- Reusing an approval, or one approval being accepted for a different action
+- Resume or restart running something twice that may already have taken effect, resetting a
+  budget, or skipping a check
+- Making the approval screen show something other than what would run
 
 ## Out of scope
 

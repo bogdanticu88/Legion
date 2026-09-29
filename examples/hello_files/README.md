@@ -13,5 +13,8 @@ The scripted model reads `notes/meeting.md`, which tells it to also read `privat
 tries, and gets `capability_denied` because the agent only has `files.read:notes/**`. Then it
 writes `workspace/out/summary.md`.
 
+`agents/publisher.yaml` shows approvals: publishing can't be undone, so the run pauses until you
+`legion approve` it, then `legion resume` finishes it.
+
 There's nothing security-specific in here. Any agent works the same way as long as its tools
 declare their effects and capabilities.

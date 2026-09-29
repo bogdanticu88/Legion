@@ -56,10 +56,11 @@ The types worth knowing:
 5. grant covers the required capabilities
 6. policy
 7. external authority (`IdentityPort.authorize`)
-8. credentials resolved
-9. tool-call budget
-10. kill check again, then run with timeout and retries
-11. output schema, secret redaction, size limit
+8. approval, if policy asked for one: request it and pause, or check and consume a granted one
+9. credentials resolved
+10. tool-call budget
+11. kill check again, then run with timeout and retries
+12. output schema, secret redaction, size limit
 
 Each step writes events. There are no hooks between steps. The extension points are the things
 the steps call (policy, identity port, credential resolver).
@@ -68,13 +69,16 @@ the steps call (policy, identity port, credential resolver).
 
 Every tool declares one:
 
-| Class | Retried on timeout? | After a crash (Phase 2) |
+| Class | Retried on timeout? | Running when the process stopped |
 |---|---|---|
-| `pure` | yes | re-run |
-| `read` | yes | re-run |
-| `write_idempotent` | yes | re-run |
-| `write` | no, marked in doubt | ask a human |
-| `external_irreversible` | no | ask a human; denied by default policy for now |
+| `pure` | yes | run again on resume |
+| `read` | yes | run again on resume |
+| `write_idempotent` | yes | run again on resume, same idempotency key |
+| `write` | no, in doubt, run pauses | in doubt, run pauses for `legion reconcile` |
+| `external_irreversible` | no, in doubt, run pauses | same; the default policy also asks for approval before running one |
+
+Tools get `ctx.idempotency_key`, which is the action hash: the same on every retry and after a
+resume, so an API that supports idempotency keys can drop duplicates.
 
 ## Capabilities and grants
 
@@ -97,8 +101,23 @@ the parent.
 
 Policy only runs for actions the grant already allows, and it can only say no. The built-in one is
 a list of rules matched on tool name, capability and effect class. Deny beats require-approval,
-which beats allow. OPA, Cedar, NIA or MIA could replace it behind the same interface. There's no
-approval flow yet, so a config that uses `require_approval` fails to load.
+which beats allow. OPA, Cedar, NIA or MIA could replace it behind the same interface. By default
+`external_irreversible` tools require approval.
+
+## Approvals
+
+When policy says `require_approval`, the pipeline records `approval.requested` and the run pauses
+(`run.paused`); the process exits. `legion approval show` prints what exactly would run, then
+`legion approve` or `legion deny`, then `legion resume`.
+
+An approval is bound to one call. Legion hashes everything that decides what the call does: run,
+task and call ids, agent spec, tool spec, arguments, resource, effect, required capabilities,
+grant, agent identity, tool settings and credential references. When the call is about to run the
+hash is rebuilt and compared; on a match the approval is consumed before the tool starts. Changing
+anything in the list, using it for another call, using it twice or using it after it expires
+(one hour by default) is refused. Details in ADR 0014.
+
+The approver is whoever runs the CLI as the local OS user. Legion doesn't authenticate them.
 
 ## Events
 
@@ -131,10 +150,9 @@ Reasoning blocks are passed back only to the provider that produced them.
 The adapters use httpx instead of vendor SDKs so that Legion is the only thing retrying, and
 every retry counts against the budget.
 
-GitHub's Copilot SDK, the Claude Agent SDK and the Codex app-server run their own agent loops.
-In Phase 4 they'll be supported as external runtimes a task can hand work to, with the results
-marked as such in the events. I'm not treating them as model providers, because their tools would
-run outside Legion's checks.
+GitHub's Copilot SDK, the Claude Agent SDK and the Codex app-server run their own agent loops, so
+their tools would run outside Legion's checks. I'm not treating them as model providers, and
+driving them isn't on the roadmap any more (ADR 0006).
 
 ## Secrets
 
@@ -171,13 +189,22 @@ Each error has a disposition and the loop only looks at that:
   and can try something else.
 - `fatal`: budget exceeded, auth failure, context too long, loop, a write in doubt. The run ends.
 
-Phase 2 adds `escalate`, which pauses the run for a human.
+- `escalate`: approval needed, or an action is in doubt. The run pauses for a person.
 
-## Resume (Phase 2)
+## Resume
 
-Resume will rebuild the run from events. Recorded model responses and tool results are reused,
-not requested again. An action that started and never finished is in doubt, and its effect class
-decides what to do (table above).
+`legion resume` checks the chain, rebuilds the run from the log, checks the recorded agent and
+grant against today's configuration (authority can shrink between runs, never grow; the model
+binding has to be the same), then continues through the normal loop. The loop starts by finishing
+whatever the last model turn left open, so a resumed run and a fresh one use the same code.
+Recorded responses and results are reused, never requested or run again. What happens to each
+kind of interruption is in ADR 0013.
+
+Budget use comes from the log, so it survives restarts. Time spent paused isn't charged; time up
+to the last event of a crashed stretch is.
+
+A run is driven by one process at a time, enforced with an OS file lock next to the store
+(ADR 0015).
 
 ## Delegation (Phase 3)
 

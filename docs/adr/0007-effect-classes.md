@@ -11,9 +11,9 @@ that simply re-execute on resume run every write twice unless the tool author th
 
 Every tool declares `pure`, `read`, `write_idempotent`, `write` or `external_irreversible`, and
 can't be registered without one. Only the first three get retried. A `write` or
-`external_irreversible` call that times out is recorded as in doubt; that fails the task in Phase 1
-and will go to a human from Phase 2. The default policy denies `external_irreversible` until
-approvals exist.
+`external_irreversible` call that times out is recorded as in doubt and the run pauses until an
+operator reconciles it (ADR 0013). The default policy asks for approval before any
+`external_irreversible` call.
 
 ## Consequences
 

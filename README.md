@@ -1,61 +1,86 @@
 # Legion
 
-Legion is a small runtime for LLM agents. It runs an agent, lets it call tools, and checks every
-tool call against what the agent is allowed to do before anything happens. Everything it does is
-written to an append-only, hash-chained event log, and the run's state is rebuilt from that log.
+Legion is my harness for running LLM agents with real permissions. It runs the agent loop, lets
+the agent call tools, and checks every tool call against what the agent is allowed to do before
+anything happens. Risky actions wait for a person to approve that exact action. Everything is
+written to an append-only, hash-chained event log, and runs can be resumed from it after a pause
+or a crash without repeating anything that may already have happened.
 
-It doesn't care which model you use or what the agent is for. The first reference application
-will be security operations, but nothing in the core knows about security.
+It doesn't care which model you use or what the agent is for. Where it's heading is a host agent
+that hands work to specialist agents, each with narrower permissions and a share of the budget.
 
-This is early work (Phase 1 of 7, see [the roadmap](docs/roadmap.md)). One agent per run, no
-resume after a crash, no approvals, no MCP yet. I wouldn't run it against anything that matters.
+Status: early (Phase 2 of 8, see [the roadmap](docs/roadmap.md)). One agent per run, no MCP, no
+delegation yet. I wouldn't point it at anything that matters.
 
 ## Why I'm building it
 
-I kept running into the same gaps in existing frameworks. Sub-agents can end up with more access
-than the agent that spawned them. An approval is usually tied to a tool name rather than to the
-exact arguments. A crash in the middle of a write often means the write runs again on resume.
-And the state of a run tends to live in the context window.
+I kept running into the same gaps. Sub-agents can end up with more access than the agent that
+started them. An approval is usually tied to a tool name rather than to the exact arguments. A
+crash in the middle of a write often means the write runs again on resume. Run state tends to
+live in the context window. Newer "harness of harnesses" projects like Raven go wide, driving
+lots of agents; I wanted something narrower that you could trust with real access.
 
-Legion tries to fix those in the runtime itself, in code small enough to read in an afternoon.
 [docs/assessment.md](docs/assessment.md) has my notes on LangGraph, the OpenAI Agents SDK,
-PydanticAI, OpenHands, Microsoft's Agent Framework and Agent Governance Toolkit and others,
-including the places where they're ahead.
+PydanticAI, OpenHands, Microsoft's Agent Framework and Agent Governance Toolkit, Raven and others,
+including where they're ahead.
 
 ## Quick start
 
-You need Python 3.12+ and [uv](https://docs.astral.sh/uv/). No API key.
+You need Python 3.12+ and [uv](https://docs.astral.sh/uv/). No API key; the starter project uses
+scripted models so it behaves the same every time.
 
 ```bash
 git clone <repo> legion && cd legion
 uv sync
 uv run legion init demo && cd demo
-uv run legion agent validate agents/assistant.yaml
 uv run legion run agents/assistant.yaml "Summarize the notes"
-uv run legion runs
 uv run legion inspect <run-id>
 uv run legion verify <run-id>
 ```
 
-The starter project uses a scripted model, so it behaves the same every time. One of the notes
-tells the assistant to also read `private/salaries.md`. The scripted model does, and Legion
-refuses because the agent only has `files.read:notes/**`:
+One of the notes tells the assistant to also read `private/salaries.md`. The scripted model does,
+and Legion refuses because the agent only has `files.read:notes/**`:
 
 ```
   30 action.proposed    read_note on private/salaries.md  23a3fe0e913f
   31 action.refused     read_note: capability_denied: the task's grant does not cover
                         files.read:private/salaries.md
-  ...
-  58 run.completed      'I wrote a two-line summary of both notes to out/summary.md. ...'
-ok 58 events, chain intact
 ```
 
 I set it up so the model goes along with the injected instruction on purpose. If the model
-refused by itself, the demo wouldn't show anything about the runtime.
+refused by itself, the demo wouldn't show anything about the harness.
+
+### Approvals
+
+The second starter agent publishes to a channel, which can't be undone, so it stops and asks:
+
+```bash
+uv run legion run agents/publisher.yaml "Publish the meeting summary"   # exits 3: paused
+uv run legion approvals
+uv run legion approval show <approval-id>
+uv run legion approve <approval-id> --note "checked the text"
+uv run legion resume <run-id>
+```
+
+`approval show` prints the tool, target, arguments, who the agent acts for, and the model's own
+explanation marked as untrusted. The approval covers that one call and nothing else: a different
+channel, different text, a second identical call or changed settings all need a new approval.
+
+### After a crash
+
+If the process dies, `legion resume <run-id>` picks up from the log. Reads and other safe calls
+that were running get run again. A write that was running is marked in doubt and the run waits
+for you to check and say what happened:
+
+```bash
+uv run legion resume <run-id>          # paused: call w1 may or may not have taken effect
+uv run legion reconcile <run-id> w1 --outcome applied --note "file is there"
+uv run legion resume <run-id>
+```
 
 To try a real model, edit `legion.yaml` so a real binding is `general/default` (Ollama at
-`http://localhost:11434/v1`, or Anthropic with `ANTHROPIC_API_KEY` set). The agent file stays
-the same.
+`http://localhost:11434/v1`, or Anthropic with `ANTHROPIC_API_KEY` set). The agent files stay the
+same.
 
 ## How it fits together
 
@@ -69,9 +94,10 @@ Runtime ──▶ AgentLoop ──▶ ActionPipeline ──▶ Tool
 ModelProvider (OpenAI-compatible, Anthropic, scripted)
 ```
 
-Each tool call becomes an `Action` and goes through `ActionPipeline`: kill check, lookup, schema,
-repeat check, grant, policy, external authority, budget, credentials, run with timeout, output
-checks. There's no other way for a tool to run.
+Every tool call becomes an `Action` and goes through `ActionPipeline`: kill check, lookup, schema,
+repeat check, grant, policy, external authority, approval, credentials, budget, run with timeout,
+output checks. There's no other way for a tool to run, and a resumed run goes through the same
+steps.
 
 More in [ARCHITECTURE.md](ARCHITECTURE.md), the decisions in [docs/adr/](docs/adr/), and the
 event format in [docs/events.md](docs/events.md).
@@ -91,9 +117,9 @@ capabilities:
 budget: {steps: 10, model_calls: 12, tool_calls: 10, tokens: 50000, wall_seconds: 120}
 ```
 
-The agent asks for a model profile and the operator's `legion.yaml` decides which model that
-means. An agent can only ask for capabilities listed under `authority.grantable` in `legion.yaml`,
-otherwise the run won't start. Agent files can't add tools, change policy or name secrets.
+The agent asks for a model profile and `legion.yaml` decides which model that means. An agent can
+only ask for capabilities listed under `authority.grantable`, otherwise the run won't start.
+Agent files can't add tools, change policy or name secrets.
 
 ## Tools
 
@@ -107,47 +133,54 @@ def read_note(args: ReadArgs, ctx: ToolContext) -> str:
     ...
 ```
 
-Every tool has to declare an effect class (`pure`, `read`, `write_idempotent`, `write`,
-`external_irreversible`) and the capabilities it needs. Reads get retried on timeout; a `write`
-that times out is recorded as in doubt and never retried. The `resource` function tells Legion what
-the call touches, which is how `files.read:notes/**` allows `notes/a.md` but not `private/b.md`.
+Every tool declares an effect class (`pure`, `read`, `write_idempotent`, `write`,
+`external_irreversible`) and the capabilities it needs. The effect class decides what happens on a
+timeout or a crash: safe ones are retried, the others are never run twice automatically. The
+`resource` function tells Legion what the call touches. Tools also get `ctx.idempotency_key`,
+which stays the same across retries and resumes.
 
 ## Security notes
 
 I assume the model can be talked into anything at any time. Legion doesn't try to detect that; it
-limits what the model can actually do. Authority is attached to each task and only ever narrows,
-every tool call is checked in one place, secrets stay out of the model's context and the log, and
-refusals are logged the same way as successes.
+limits what the model can actually do. Authority is attached to each task and only narrows, every
+tool call is checked in one place, spending is capped, irreversible actions wait for a person,
+and uncertain writes wait for an operator.
 
 What it can't do is in [THREAT_MODEL.md](THREAT_MODEL.md). The big ones: a manipulated model can
-still misuse whatever the grant allows, there's no sandbox, and whoever owns the machine can
-rewrite the log.
+still misuse whatever the grant allows, there's no sandbox, approvers aren't authenticated, and
+whoever can write the event store can rewrite it or add to it.
 
 ## Known limitations
 
-- One agent per run. Delegation is Phase 3, although `Grant.attenuate` already exists and is
-  tested.
-- No resume after a crash yet (Phase 2). The log already records which actions were in flight.
-- No approvals yet (Phase 2). Config that needs approval is rejected at load time.
-- No MCP, streaming or images.
-- The operator declares what each model supports; the resolver doesn't probe endpoints.
-- Tool calls in one model turn run one after another.
-- Adapters are tested against recorded HTTP responses. I haven't run the real-model tests in CI.
-- The token budget caps a call's output but not its input, so one call can go over by the size of
-  its prompt. Cost is only checked after each call.
+- One agent per run. Delegation is next (Phase 3).
+- Approvers are whoever runs the CLI as the local OS user. Nothing is signed.
+- One machine. Locks are OS file locks next to the store.
+- Legion never automatically repeats an action that may have happened. It doesn't promise
+  exactly-once execution: an operator decides what happened to in-doubt actions.
+- A tool that raises after it already did its work looks like a clean failure. Tools should raise
+  `ActionInDoubt` when they don't know.
+- Time a tool spent hanging before a crash, and tokens of a response lost in a crash, aren't
+  charged.
+- There's no command to cancel a paused run other than denying the approval or abandoning the
+  in-doubt action.
+- The token budget caps a call's output but not its input. Cost is checked after each call.
 - The hash chain catches edited or missing events but not events cut off the end.
+- No MCP, streaming or images. The operator declares what each model supports.
+- Adapters are tested against recorded and generated responses. I haven't run them against a real
+  model yet.
 
 ## Roadmap
 
-Next is crash recovery and approvals, then delegation, then more access methods and support for
-external agent runtimes (Copilot SDK, Claude Agent SDK, Codex), then MCP, the security-operations
-example, and exports plus the NIA adapter. Details in [docs/roadmap.md](docs/roadmap.md).
+Next: a host agent with specialists (delegation with narrower grants and carved budgets), then
+plans a person can approve once, built-in specialist agents, memory that remembers where facts
+came from, MCP, and exports plus the NIA identity adapter. Details in
+[docs/roadmap.md](docs/roadmap.md).
 
 ## Related projects
 
 NIA is my Go control plane for agent identity, credentials and kill switches. MIA is a Python
-service for delegated mandates. Legion can talk to either through `IdentityPort` (Phase 7) but
-needs neither.
+service for delegated mandates. Legion can talk to either through `IdentityPort` (later) but needs
+neither.
 
 ## Development
 

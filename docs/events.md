@@ -30,10 +30,18 @@ and decimals as strings.
 
 - A run starts with `run.created`, `task.created`, `run.started`.
 - While the run keeps going, each tool call from the model ends with one of `tool.completed`,
-  `tool.failed` (with `will_retry: false`) or `action.refused`. If a fatal error ends the run in
-  the middle of a call (loop, expired grant, missing credential, budget, kill), the call doesn't
-  get its own ending. `task.failed` covers it, preceded by `action.in_doubt` if the tool had
-  started.
+  `tool.failed` (with `will_retry: false`), `action.refused` or `action.reconciled`. If a fatal
+  error ends the run in the middle of a call (loop, expired grant, missing credential, budget,
+  kill), the call doesn't get its own ending. `task.failed` covers it, preceded by
+  `action.in_doubt` if the tool had started.
+- A call can be proposed more than once (after a pause or crash). It's still one call: same
+  `call_id`, and repeat detection counts it once.
+- For a call that needed approval, `approval.consumed` comes before its `action.authorized` and
+  `tool.started`.
+- A paused run ends with `run.paused`, right after `task.awaiting_approval` or `task.blocked`,
+  written together in one append. A resumed run continues with `run.resumed`.
+- Every active stretch ends with a `budget.consumed` for `wall_seconds`, except one that ends in
+  `internal_error`. A stretch that ended in a crash is charged when the run is resumed.
 - `tool.started` always comes after an `action.authorized` with the same `action_hash` and a
   `budget.consumed` for `tool_calls`.
 - `model.requested` always comes after a `budget.consumed` for `model_calls`.
@@ -42,7 +50,8 @@ and decimals as strings.
   effort.
 - `tool.completed` with `is_error: true` still means the tool ran. If its output failed the tool's
   output schema, the output is left out and the content says the action took effect.
-- The last event is `run.completed`, `run.failed` or `run.cancelled`.
+- The last event is `run.completed`, `run.failed`, `run.cancelled`, or `run.paused` while the run
+  waits for a person.
 
 ## Types
 
@@ -58,7 +67,7 @@ and decimals as strings.
 | `task.completed` | `output`, `structured`, `truncated` | model answered without tool calls and the answer was accepted |
 | `task.failed` | `error_code`, `message`, `disposition` | |
 | `task.cancelled` | `reason` | |
-| `model.requested` | `attempt`, `provider`, `model`, `message_count`, `tool_names`, `request_hash`, `max_output_tokens` | before each attempt. The request itself isn't stored since it comes from the transcript; the hash is there so resume (Phase 2) can check it rebuilt the same one |
+| `model.requested` | `attempt`, `provider`, `model`, `message_count`, `tool_names`, `request_hash`, `max_output_tokens` | before each attempt. The request itself isn't stored since it comes from the transcript; the hash lets you compare two requests. Resume doesn't use it |
 | `model.responded` | `attempt`, `message`, `stop_reason`, `usage`, `cost_usd`, `latency_ms` | `message` is stored in full |
 | `model.failed` | `attempt`, `error_code`, `message`, `disposition`, `will_retry`, `retry_in_ms` | |
 | `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required` | the call passed lookup and schema checks |
@@ -72,14 +81,29 @@ and decimals as strings.
 | `budget.consumed` | `grant_id`, `dimension`, `amount`, `total` | anything charged |
 | `budget.exceeded` | `grant_id`, `dimension`, `limit`, `attempted` | a limit stopped the run |
 | `output.rejected` | `attempt`, `reason` | final answer didn't match the agent's output schema |
+| `run.paused` | `reason` (`approval` or `reconciliation`), `approval_id`, `call_id` | the run is waiting for a person |
+| `run.resumed` | `by`, `previous_status`, `config_hash` | `legion resume`; `previous_status` is `running` if the process had crashed |
+| `task.awaiting_approval` | `approval_id` | |
+| `task.blocked` | `call_id`, `reason` | an action is in doubt |
+| `task.resumed` | | |
+| `action.interrupted` | `call_id`, `action_hash`, `effect` | a safe-to-repeat call was running when the process stopped; it will run again |
+| `action.reconciled` | `call_id`, `action_hash`, `outcome` (`applied` or `not_applied`), `by`, `note` | an operator said what happened to an in-doubt action |
+| `approval.requested` | `approval_id`, `call_id`, `action_hash`, `binding_hash`, `subject`, `expires_at` | `subject` is what the approver is shown; `binding_hash` is what is enforced |
+| `approval.granted`, `approval.denied` | `approval_id`, `by`, `note` | |
+| `approval.expired` | `approval_id` | noticed at use, at resume, or when someone tried to decide |
+| `approval.consumed` | `approval_id`, `call_id` | just before the approved call runs |
+| `approval.invalidated` | `approval_id`, `reason` | the call no longer matched what was approved |
 
 ## Codes
 
 Refusals: `unknown_tool`, `tool_not_offered`, `invalid_arguments`, `capability_denied`,
-`policy_denied`, `approval_unavailable`, `repeated_action`.
+`policy_denied`, `approval_denied`, `approval_expired`, `approval_mismatch`, `approval_reused`,
+`repeated_action`.
+
+Pausing (`disposition: escalate`): `approval_required`, `action_in_doubt`.
 
 Fatal: `config_error`, `no_model_binding`, `budget_exceeded`, `deadline_exceeded`, `killed`,
-`loop_detected`, `action_in_doubt`, `credential_unavailable`, `grant_expired`,
+`loop_detected`, `credential_unavailable`, `grant_expired`, `abandoned`,
 `model_auth_error`, `model_request_rejected`, `context_exhausted`, `final_output_invalid`,
 `invalid_transition`, `concurrent_append`, `internal_error`.
 

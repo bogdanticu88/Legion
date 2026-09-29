@@ -25,6 +25,29 @@ Sources are at the bottom.
 | CaMeL and follow-ups | Tracking data flow so prompt injection can't change what the agent does | Needs a restricted plan language and two models. Too heavy for now, but where I'd like to go eventually |
 | "Harness Engineering" study (arXiv 2609.00006) | Looked at eleven coding harnesses | None of them use a general agent framework; they all have their own loop. Made me more comfortable writing a small kernel |
 
+## Raven (added later, September 2026)
+
+[Raven](https://github.com/EverMind-AI/Raven) calls itself "the harness of harnesses": a host
+agent that plans task graphs and hands work to its own specialists (research, code, design,
+on-call) and to 13 other agents such as Claude Code, Codex and Copilot. It adds memory across
+sessions and a component that tries changes to its own harness and keeps what passes checks.
+Pre-alpha, Apache-2.0. I've read the README, the 0.2.0 release notes and a couple of PRs, not
+the code.
+
+It has a permission gate at tool dispatch with `ask`, `smart` and `full` modes, and `smart`
+escalates by what an action does, which is close to my effect classes. Deny rules from the host
+now reach sub-agents ([PR #698](https://github.com/EverMind-AI/Raven/pull/698)). What I didn't
+find documented: third-party agents are only governed by the requests they choose to send ("a
+call their own gate allows never produces a request the host could refuse"), permissions are
+deny patterns rather than grants, cost is reported but not capped, approvals don't expire and
+aren't described as tied to arguments, and there's no crash recovery or audit log.
+
+What I'm taking from it: the host agent with specialists, planning as something first-class, and
+shipping useful built-in agents. What I'm leaving alone: driving other harnesses, and a harness
+that rewrites itself. Legion's angle is the part Raven is thinnest on: a positive grant that only
+narrows, one checked path for every action, enforced budgets, approvals bound to one call, and
+recovery that never repeats an uncertain action.
+
 ## Problems I kept seeing
 
 - Run state lives in the context window, so resuming means replaying a transcript.
@@ -86,3 +109,4 @@ a codebase you can read in an afternoon.
 - [Copilot SDK GA](https://github.blog/changelog/2026-06-02-copilot-sdk-is-now-generally-available/)
 - [Claude Agent SDK with a Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
 - Codex: [auth](https://learn.chatgpt.com/docs/auth), [app-server](https://learn.chatgpt.com/docs/app-server)
+- Raven: [repo](https://github.com/EverMind-AI/Raven), [0.2.0 release notes](https://github.com/EverMind-AI/Raven/releases/tag/v0.2.0), [PR #698](https://github.com/EverMind-AI/Raven/pull/698)

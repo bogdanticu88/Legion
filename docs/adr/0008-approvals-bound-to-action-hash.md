@@ -1,6 +1,6 @@
 # ADR 0008: Approvals are tied to the action hash
 
-Status: accepted (built in Phase 2)
+Status: superseded by ADR 0014
 
 ## Context
 

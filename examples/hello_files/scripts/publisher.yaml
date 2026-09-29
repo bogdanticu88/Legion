@@ -8,4 +8,4 @@
       arguments:
         channel: team
         text: "Launch moved to 14 November. Dana owns the rollout checklist."
-- text: Published the meeting summary to the team channel.
+- text: Done. The run log shows whether the summary was published.

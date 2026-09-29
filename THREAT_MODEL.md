@@ -19,8 +19,8 @@ the current code; otherwise the phase is given.
 | Legion and native Python tools | yes | Same process. A malicious tool can do anything Python can. |
 | Model output | no | Shaped by everything the model read, including attacker text. |
 | Tool output | no | Can contain injected instructions. |
-| MCP server descriptions and results (Phase 5) | no | They end up in the prompt and can change. |
-| Human approver (Phase 2) | mostly | Can be rushed or phished. |
+| MCP server descriptions and results (Phase 7) | no | They end up in the prompt and can change. |
+| Human approver | mostly | Can be rushed or phished. Not authenticated: it's whoever runs the CLI. |
 | The host | yes | Whoever owns it owns the process and the log. |
 
 The main assumption: the model can be manipulated at any point. Legion doesn't try to notice. It
@@ -32,7 +32,7 @@ limits what the model can make happen.
 |---|---|---|---|
 | Prompt injection, direct or through tool output | Every action is checked against the grant and policy whatever the model wants. Tool output goes back to the model as data, never to the harness as instructions | now | Anything the grant allows can still happen. There's no tracking of which input influenced which decision |
 | Malicious native tool | nothing | - | Tools are trusted code. Review them |
-| Malicious MCP server, tool poisoning, rug pulls | Operator manifest, pinned description hash, unlisted tools refused | Phase 5 | A pinned server can still return hostile results |
+| Malicious MCP server, tool poisoning, rug pulls | Operator manifest, pinned description hash, unlisted tools refused | Phase 7 | A pinned server can still return hostile results |
 | Poisoned tool output | Output schema checks, size limit, secret redaction | now | Schemas don't catch meaning |
 | Credential theft | Config holds references only. Secrets never go into model context. Resolved secret values are scrubbed from every event and from tool output | now | A tool that encodes or splits a secret gets past the scrubbing. Secrets under 4 characters aren't scrubbed |
 | Secrets in logs | `Secret` won't print its value. Tests check the database file for a planted secret | now | A secret the model passes as a plain argument isn't recognised as one |
@@ -47,8 +47,13 @@ limits what the model can make happen.
 | Denial of service | Tool timeouts, wall-clock budget, bounded retries | now | A sync tool that ignores cancellation keeps its thread busy |
 | Context poisoning | Nothing the model writes becomes config or authority | now | Poisoned text stays in the transcript for the rest of the task |
 | Log tampering | Append-only triggers, hash chain, `legion verify` | now | The host owner can rewrite the whole chain, and events cut off the end aren't detected without an outside record of the last hash |
-| Approval bypass | Approval tied to the action hash, single use, expires | Phase 2 | A phished approver approves the real thing |
-| Kill switch ignored | Kill state checked before every model call and tool run | interface now, NIA adapter Phase 7 | A tool call already running finishes |
+| Approval bypass or reuse | Approval bound to a hash of one call (arguments, target, grant, agent, tool spec, settings, credential refs), consumed before the tool runs, expires, re-checked when the call runs, including after a restart | now | A phished approver approves the real thing |
+| Spoofed approval screen | Everything printed from a run has markup escaped and control/bidi characters replaced | now | The approver still has to read it |
+| Forged approval | Approvals are events in the log; the projection rejects impossible state changes; configs that let a tool setting reach the state directory are refused | now | Anyone who can write the store (same OS user, or a tool given paths there) can append a valid approval. Approvers aren't authenticated; signed approvals would fix this |
+| Duplicate side effects after a crash or restart | Recorded results are reused, never re-run. Interrupted `write`/`external_irreversible` calls are in doubt and wait for an operator. One process per run via file locks | now | Only on one machine. A tool that raises after doing its work (instead of raising `ActionInDoubt`) looks like a clean failure |
+| Budget reset by restart | Budget use is rebuilt from the log; crashed stretches are charged on resume | now | Time a tool spent hanging before a crash and tokens of a response lost to a crash aren't charged |
+| Resume skipping checks | Resume uses the same loop and pipeline; the recorded grant has to still be grantable and the model binding unchanged | now | |
+| Kill switch ignored | Kill state checked before every model call and tool run, including after a resume | interface now, NIA adapter later | A tool call already running finishes |
 
 ## Out of reach
 
@@ -58,4 +63,4 @@ limits what the model can make happen.
 - A compromised host, including rewriting the log.
 - A compromised or careless approver.
 - Leaking data through something the grant allows, like writing it to a file someone else reads.
-- What external runtimes (Phase 4) do beyond their declared guarantees.
+- What any external agent runtime does, if one is ever added (ADR 0006).
