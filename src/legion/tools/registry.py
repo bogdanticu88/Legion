@@ -44,11 +44,7 @@ class ToolRegistry:
 
 
 def load_tool_module(path: Path) -> list[Tool]:
-    """Import a Python file and return its `TOOLS` list.
-
-    This executes the file. Tool modules are operator configuration and as trusted as the
-    configuration that names them.
-    """
+    # Runs the file. Tool modules are trusted like the rest of the operator config.
     if not path.is_file():
         raise ConfigError(f"tool module not found: {path}")
     spec = importlib.util.spec_from_file_location(f"legion_tools_{path.stem}", path)

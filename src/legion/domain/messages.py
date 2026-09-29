@@ -1,5 +1,3 @@
-"""Provider-neutral conversation parts. Adapters translate these to and from each wire format."""
-
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
@@ -29,9 +27,8 @@ class ToolResultPart(BaseModel):
     is_error: bool = False
 
 
+# opaque; only sent back to the provider it came from
 class ReasoningPart(BaseModel):
-    """Opaque reasoning data. Only ever sent back to the provider that produced it."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
     type: Literal["reasoning"] = "reasoning"
     provider: str

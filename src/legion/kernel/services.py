@@ -26,8 +26,6 @@ Sleep = Callable[[float], Awaitable[None]]
 
 @dataclass(frozen=True)
 class RetryPolicy:
-    """Deterministic exponential backoff. Every attempt is also charged to the budget."""
-
     max_attempts: int = 3
     base_delay: float = 1.0
     max_delay: float = 30.0
@@ -40,13 +38,7 @@ class RetryPolicy:
 
 @dataclass
 class Recorder:
-    """The one way to change run state: append an event, then apply it.
-
-    Every payload passes through redaction of the secret values resolved during the run, so no
-    error path can carry a credential into the log. The append is shielded from cancellation:
-    if the store committed the event, the state must see it, or the next append would be
-    refused and the run would end without a terminal event.
-    """
+    # All state changes go through emit(). Payloads are scrubbed of resolved secrets first.
 
     store: EventStore
     state: RunState
@@ -80,6 +72,8 @@ class Recorder:
         )
         if self.secrets:
             new = new.model_copy(update={"payload": _redact_tree(new.payload, self.secrets)})
+        # If we get cancelled mid-append the event may still be committed, and the state has to
+        # know about it or every later append fails on expected_seq.
         pending = asyncio.ensure_future(self.store.append([new], expected_seq=self.state.last_seq))
         try:
             [event] = await asyncio.shield(pending)
@@ -95,7 +89,7 @@ MIN_SECRET_LENGTH = 4
 
 
 def redact_text(text: str, secrets: set[str] | list[str]) -> tuple[str, int]:
-    """Replace secret values, including their JSON-escaped form, with a marker."""
+    # also catches the JSON-escaped form of each value
     count = 0
     for value in secrets:
         for form in {value, json.dumps(value)[1:-1]}:
@@ -117,8 +111,6 @@ def _redact_tree(value: Any, secrets: set[str]) -> Any:
 
 @dataclass
 class TaskRuntime:
-    """What the loop and the pipeline need to know about the task being executed."""
-
     run_id: str
     task_id: str
     parent_task_id: str | None

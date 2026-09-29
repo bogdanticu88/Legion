@@ -1,5 +1,4 @@
-"""OpenAI Chat Completions wire format. Also spoken by Ollama, vLLM, llama.cpp's server and most
-enterprise gateways, which is why capabilities come from the binding and are never assumed."""
+# Chat Completions format. Ollama, vLLM, llama.cpp and most gateways speak it too.
 
 from __future__ import annotations
 

@@ -15,12 +15,8 @@ class Dimension(StrEnum):
     WALL_SECONDS = "wall_seconds"
 
 
+# None = unlimited. Defaults are small on purpose.
 class BudgetLimits(BaseModel):
-    """Upper bounds for one grant. `None` means unlimited, which only the operator can choose.
-
-    The defaults are deliberately small so that an agent defined without a budget cannot run away.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     steps: int | None = Field(default=20, ge=0)

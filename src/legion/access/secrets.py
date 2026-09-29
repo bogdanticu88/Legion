@@ -1,9 +1,3 @@
-"""Secret references and resolution.
-
-Configuration only ever holds references like `env:ANTHROPIC_API_KEY`. The value is fetched at the
-moment it is needed and wrapped so that printing, logging or serializing it shows nothing.
-"""
-
 from __future__ import annotations
 
 import os

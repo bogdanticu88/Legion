@@ -32,8 +32,6 @@ class ModelFeature(StrEnum):
 
 
 class ModelRequirement(BaseModel):
-    """What an agent needs from a model. The operator's configuration decides what satisfies it."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     profile: str = "general/default"
@@ -48,8 +46,6 @@ class ModelRequirement(BaseModel):
 
 
 class AgentSpec(BaseModel):
-    """A declarative agent. No runtime state lives here; the same spec can run many times."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str

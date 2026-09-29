@@ -1,5 +1,3 @@
-"""Wire-format tests for the HTTP adapters, using recorded exchanges instead of a network."""
-
 import json
 from pathlib import Path
 from typing import Any
@@ -275,7 +273,7 @@ class TestAnthropic:
         assert isinstance(response.message.parts[0], ReasoningPart)
         assert response.usage.total == 26
 
-    async def test_reasoning_from_another_provider_is_dropped(self) -> None:
+    async def test_foreign_reasoning_dropped(self) -> None:
         rec = Recorder(httpx.Response(200, json={"content": [], "stop_reason": "end_turn"}))
         foreign = Message(
             role="assistant",
@@ -350,7 +348,7 @@ class TestAnthropic:
             await anthropic(rec).generate(request())
 
 
-async def test_api_key_never_reaches_the_event_log(tmp_path: Path) -> None:
+async def test_api_key_not_logged(tmp_path: Path) -> None:
     rec = Recorder(
         httpx.Response(
             200,
@@ -390,7 +388,7 @@ async def test_api_key_never_reaches_the_event_log(tmp_path: Path) -> None:
 
 
 class TestResolver:
-    def test_first_binding_that_satisfies_needs(self) -> None:
+    def test_resolve(self) -> None:
         script = ScriptedProvider([])
         rec = Recorder()
         resolver = ModelResolver(

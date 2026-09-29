@@ -1,6 +1,4 @@
-"""A deterministic provider that replays a script. Used by tests and by the examples so the whole
-runtime can be exercised with no model and no API key. It does not pretend to reason: it returns
-the next scripted turn whatever the request says."""
+# Replays a fixed script. For tests and the examples, so nothing needs a model or a key.
 
 from __future__ import annotations
 

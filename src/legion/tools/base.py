@@ -19,12 +19,6 @@ TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class ToolSpec(BaseModel):
-    """What the harness needs to know before it lets a tool run.
-
-    Names are restricted to what every provider accepts. Anything that is not `pure` must name at
-    least one capability, so an undeclared effect cannot slip through as "needs nothing".
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
@@ -43,6 +37,7 @@ class ToolSpec(BaseModel):
     def _check(self) -> Self:
         if not TOOL_NAME.match(self.name):
             raise ValueError(f"tool name must match {TOOL_NAME.pattern}: {self.name!r}")
+        # anything with an effect has to say what it needs
         if self.effect is not EffectClass.PURE and not self.capabilities:
             raise ValueError(f"tool {self.name} has effect {self.effect} but no capabilities")
         for name in self.capabilities:
@@ -64,8 +59,6 @@ class ToolSpec(BaseModel):
 
 @dataclass(frozen=True)
 class ToolContext:
-    """All a tool receives from the harness. There is no way back into the kernel from here."""
-
     task_id: str
     agent: str
     call_id: str

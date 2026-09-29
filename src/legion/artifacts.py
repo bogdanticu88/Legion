@@ -1,4 +1,4 @@
-"""Content-addressed storage for tool outputs too large to keep in an event."""
+# Content-addressed blobs for tool output too big to keep in an event.
 
 from __future__ import annotations
 

@@ -1,10 +1,6 @@
-"""Invariants any change to the kernel must preserve. Generated inputs, no model, no network.
-
-1. Attenuation never widens authority.
-2. A pre-checked budget dimension never goes over its limit.
-3. Changing any recorded event breaks the chain.
-4. No tool runs without a recorded authorization that the grant covers, whatever the model asks.
-"""
+# Properties that must keep holding as the kernel changes: attenuation never widens, a
+# pre-checked budget never overspends, editing an event breaks the chain, and nothing runs
+# without an authorization the grant covers.
 
 from decimal import Decimal
 from typing import Any
@@ -103,7 +99,7 @@ def test_prechecked_budget_never_overspends(limit: int, amounts: list[int]) -> N
 
 @settings(max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(data=st.data())
-async def test_any_edit_to_a_recorded_event_is_detected(data: st.DataObject) -> None:
+async def test_edits_break_chain(data: st.DataObject) -> None:
     h = build([calls([("read_file", {"path": "docs/a.md"})]), reply("done")])
     outcome = await h.run()
     events = await h.events(outcome.run_id)
@@ -157,7 +153,7 @@ tool_calls = st.lists(
     max_examples=60, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
 )
 @given(script=st.lists(tool_calls, min_size=1, max_size=6))
-async def test_no_effect_without_covering_authorization(
+async def test_nothing_runs_unauthorized(
     script: list[list[tuple[str, dict[str, str]]]],
 ) -> None:
     files = Files({"docs/a.md": "alpha", "secret/b.md": "beta"})

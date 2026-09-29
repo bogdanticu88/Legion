@@ -1,4 +1,4 @@
-"""Event envelope and typed payloads. docs/events.md documents every type listed here."""
+# Keep docs/events.md in sync with this file.
 
 from __future__ import annotations
 
@@ -142,9 +142,8 @@ class ActionProposed(_Payload):
     required: list[str]
 
 
+# action_hash is None when the call was refused before it became an Action
 class ActionRefused(_Payload):
-    """The model is told `message`. `action_hash` is absent when refusal came before an Action."""
-
     call_id: str
     tool: str
     action_hash: str | None
@@ -246,9 +245,8 @@ PAYLOADS: dict[EventType, type[_Payload]] = {
 }
 
 
+# an event before the store assigns seq and hashes
 class EventDraft(BaseModel):
-    """An event before the store gives it a sequence number and a place in the chain."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
@@ -269,7 +267,6 @@ class Event(EventDraft):
     hash: str
 
     def body(self) -> dict[str, Any]:
-        """Everything the hash covers."""
         return self.model_dump(mode="json", exclude={"hash"})
 
     def typed(self) -> Any:

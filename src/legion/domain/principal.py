@@ -22,11 +22,9 @@ class Principal(BaseModel):
 
 
 class IdentityContext(BaseModel):
-    """Who a task acts for. Secret values never live here, only in the credential resolver."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     principal: Principal
     agent_ref: str
-    # Outermost first: the human who started the run, then each delegating agent.
+    # outermost first: the human, then each delegating agent
     on_behalf_of: tuple[str, ...] = ()

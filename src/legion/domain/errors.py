@@ -1,7 +1,4 @@
-"""Every Legion error carries one disposition. The loop acts on the disposition, never the type.
-
-Phase 2 adds a fourth disposition, escalate, for errors that pause the run for a human.
-"""
+# The loop only looks at `disposition`, never at the exception type.
 
 from __future__ import annotations
 
@@ -24,7 +21,7 @@ class LegionError(Exception):
         self.message = message
 
 
-# Configuration and startup. Always fatal: a run that starts misconfigured is worse than no run.
+# config / startup
 
 
 class ConfigError(LegionError):
@@ -39,7 +36,7 @@ class NoModelBinding(ConfigError):
     code = "no_model_binding"
 
 
-# Model calls
+# model calls
 
 
 class ModelTimeout(LegionError):
@@ -78,7 +75,7 @@ class ContextExhausted(LegionError):
     code = "context_exhausted"
 
 
-# Actions refused before execution. Recoverable: the model is told and may choose again.
+# refused before running; the model gets told and can try something else
 
 
 class ActionRefused(LegionError):
@@ -117,7 +114,7 @@ class LoopDetected(LegionError):
     code = "loop_detected"
 
 
-# Tool execution
+# tool execution
 
 
 class ToolTimeout(LegionError):
@@ -126,15 +123,12 @@ class ToolTimeout(LegionError):
 
 
 class ToolFailed(LegionError):
-    """The tool raised. The model sees the message and can decide what to do."""
-
     code = "tool_failed"
     disposition = Disposition.RECOVERABLE
 
 
+# tools raise this for transient failures (e.g. a 503 upstream)
 class ToolRetryable(LegionError):
-    """Raised by a tool to say the failure is transient, for example a 503 from its backend."""
-
     code = "tool_retryable"
     disposition = Disposition.RETRYABLE
 
@@ -144,9 +138,8 @@ class InvalidToolOutput(LegionError):
     disposition = Disposition.RECOVERABLE
 
 
+# a write may or may not have happened
 class ActionInDoubt(LegionError):
-    """A write may or may not have happened. Phase 2 escalates this to a human instead."""
-
     code = "action_in_doubt"
 
 
@@ -154,7 +147,7 @@ class CredentialUnavailable(LegionError):
     code = "credential_unavailable"
 
 
-# Run-level limits
+# run limits
 
 
 class BudgetExceeded(LegionError):

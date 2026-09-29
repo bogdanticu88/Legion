@@ -37,8 +37,6 @@ class Pricing(BaseModel):
 
 
 class ModelBinding(BaseModel):
-    """One configured way to satisfy a profile: which provider, which model, what it can do."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     profile: str
@@ -47,7 +45,7 @@ class ModelBinding(BaseModel):
     features: frozenset[ModelFeature] = frozenset({ModelFeature.TOOLS})
     max_context: int | None = None
     pricing: Pricing | None = None
-    # Provider escape hatch, keyed by provider kind, e.g. {"anthropic": {"thinking": {...}}}.
+    # e.g. {"anthropic": {"thinking": {...}}}
     options: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -58,7 +56,7 @@ class Resolved:
 
     @property
     def features(self) -> frozenset[ModelFeature]:
-        # The operator says what the model can do; the adapter says what Legion can use.
+        # declared by the operator, limited by what the adapter implements
         return self.binding.features & self.provider.supported
 
 

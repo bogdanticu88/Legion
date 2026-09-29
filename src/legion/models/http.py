@@ -1,5 +1,3 @@
-"""HTTP plumbing shared by the adapters: one request, no retries, errors mapped to dispositions."""
-
 from __future__ import annotations
 
 import json
@@ -47,7 +45,7 @@ async def post_json(
 
 
 def loads_strict(text: str) -> Any:
-    """json.loads without NaN or Infinity, which Python accepts and canonical JSON does not."""
+    # python's json accepts NaN/Infinity, we can't hash those
     return json.loads(text, parse_constant=_reject_constant)
 
 

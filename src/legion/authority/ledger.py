@@ -9,14 +9,9 @@ from legion.events.projections import RunState
 from legion.events.types import BudgetConsumed
 
 
+# Counts (steps, calls) are checked before they happen. Tokens and cost are only known
+# afterwards, so they get recorded even when they go over, and then the run stops.
 class Ledger:
-    """Budget accounting for one grant, read from the run state rather than kept on the side.
-
-    Two kinds of charge: counts known in advance (steps, calls) are checked before the thing
-    happens; amounts only known afterwards (tokens, cost) are recorded even when they overshoot,
-    because they were really spent, and then the run stops.
-    """
-
     def __init__(self, grant: Grant, state: RunState) -> None:
         self.grant = grant
         self.state = state
@@ -37,7 +32,6 @@ class Ledger:
             raise BudgetExceeded(dimension.value, limit, attempted)
 
     def charge(self, dimension: Dimension, amount: Decimal | int) -> tuple[BudgetConsumed, bool]:
-        """Return the consumption record and whether it went over the limit."""
         total = self.used(dimension) + Decimal(amount)
         limit = self.grant.budget.limit(dimension)
         record = BudgetConsumed(

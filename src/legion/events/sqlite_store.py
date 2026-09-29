@@ -40,13 +40,8 @@ BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 """
 
 
+# The triggers only stop casual edits. `verify` is what actually catches tampering.
 class SqliteEventStore:
-    """Append-only event log in one SQLite file.
-
-    The triggers stop accidental edits through SQL. They do not stop someone who owns the file,
-    which is why `verify` recomputes the chain from the stored bodies.
-    """
-
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         if str(path) != ":memory:":

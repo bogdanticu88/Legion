@@ -1,6 +1,3 @@
-"""`legion.yaml`: the operator's configuration. It is trusted: it decides what can be granted,
-which tools exist and which models are used. Agents are data and cannot change any of it."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -185,7 +182,7 @@ def load_config(path: Path) -> Loaded:
             Capability.parse(cap)
         except ValueError as exc:
             raise ConfigError(f"{path}: invalid grantable capability {cap!r}") from exc
-    # Building the policy here surfaces unsupported verdicts at load time, not mid-run.
+    # build it once here so bad rules fail at load time
     RuleTablePolicy(config.policy.rules, config.policy.default)
     return Loaded(path=path.resolve(), config=config, config_hash=digest(raw))
 

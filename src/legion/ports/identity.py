@@ -1,20 +1,5 @@
-"""The boundary to an external identity and authorization authority such as NIA or MIA.
-
-Legion enforces inside one run. Identity, credential issuance, per-agent grants, kill state and
-risk across runs belong to the external authority. The effective permission for an action is
-Legion's grant intersected with `authorize`, and `kill_state` is checked before every model call
-and every tool execution. Legion must work with no authority at all, which is what
-`NullIdentityPort` is.
-
-Mapping to the known authorities (adapters are Phase 7):
-
-    method           NIA                                    MIA
-    kill_state       kill sentinel / revoked credential     mandate revoked or suspect
-    authorize        gateway decision for the tool call     authz.authorize
-    credential       POST /agents/{ref}/credentials         token exchange
-    on_delegation    register child, grant a subset        mandates.delegate
-    evidence         incidents and audit records            audit records
-"""
+# Port to an external identity/authorization service (NIA or MIA). Adapters come in Phase 7;
+# see ARCHITECTURE.md for how the methods map onto each.
 
 from __future__ import annotations
 
@@ -68,8 +53,7 @@ class IdentityPort(Protocol):
 
 
 class NullIdentityPort:
-    """No external authority: local identity, never killed, no external veto."""
-
+    # default when no NIA/MIA is configured: never killed, never vetoes
     source = "local"
 
     async def agent_identity(self, agent_ref: str) -> AgentIdentity:

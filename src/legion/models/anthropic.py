@@ -1,10 +1,3 @@
-"""Anthropic Messages API.
-
-Thinking blocks and any content block type this adapter does not know are kept as opaque
-reasoning parts and sent back unchanged on the next turn, which the API requires for extended
-thinking with tool use. They are never sent to another provider.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -83,8 +76,7 @@ def to_wire(messages: tuple[Message, ...]) -> list[dict[str, Any]]:
         blocks = [b for b in (_block(p) for p in message.parts) if b is not None]
         if not blocks:
             continue
-        # The API wants strictly alternating roles, so consecutive tool results and user text
-        # travel in one user message.
+        # the API wants alternating roles, so merge consecutive user/tool messages
         if wire and wire[-1]["role"] == role:
             wire[-1]["content"].extend(blocks)
         else:

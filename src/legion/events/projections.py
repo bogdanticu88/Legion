@@ -1,8 +1,4 @@
-"""Run state as a pure function of the event log.
-
-The runtime applies every event it appends to a `RunState` and reads its transcript and budget
-from there, so a run rebuilt from storage and the live run are produced by the same code.
-"""
+# Run state rebuilt from events. The runtime uses the same code on the live run.
 
 from __future__ import annotations
 
@@ -62,7 +58,7 @@ class TaskView:
     error: Failure | None = None
     repeats: Counter[str] = field(default_factory=Counter)
     rejections: int = 0
-    # call_id -> (action_hash, effect). An entry in `in_flight` has started and not finished.
+    # call_id -> (action_hash, effect); in_flight = started but not finished
     proposed: dict[str, tuple[str, str]] = field(default_factory=dict)
     in_flight: dict[str, tuple[str, str]] = field(default_factory=dict)
 

@@ -60,7 +60,7 @@ def init(
 
 @app.command()
 def providers(config: ConfigOption = Path("legion.yaml")) -> None:
-    """List model bindings and whether their credentials are available. Never prints secrets."""
+    """List model bindings and whether their API keys are set."""
     loaded = _load(config)
     table = Table("profile", "provider", "kind", "model", "features", "access", "pricing")
     for binding in loaded.config.models:

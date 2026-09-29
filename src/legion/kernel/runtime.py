@@ -48,8 +48,6 @@ def _id(prefix: str) -> str:
 
 
 class Legion:
-    """Start runs. Everything a run needs is passed in here; nothing is read from globals."""
-
     def __init__(
         self,
         *,
@@ -84,7 +82,7 @@ class Legion:
         self.config_hash = config_hash
 
     def check(self, agent: AgentSpec) -> tuple[list[str], list[str]]:
-        """Return (errors, warnings). Errors stop the agent from starting."""
+        """Return (errors, warnings). Any error means the agent can't start."""
         errors: list[str] = []
         warnings: list[str] = []
         unknown = [t for t in agent.tools if self.tools.get(t) is None]
@@ -249,7 +247,6 @@ class Legion:
 
 
 async def _mark_in_doubt(kernel: Kernel, task: TaskRuntime, reason: str) -> None:
-    """Anything started and not finished is in doubt. Say so before the run ends."""
     view = kernel.state.tasks[task.task_id]
     for call_id, (action_hash, effect) in list(view.in_flight.items()):
         await kernel.emit(

@@ -1,5 +1,4 @@
-# Operator configuration. Trusted: it decides what can be granted, which tools exist and which
-# models are used. Agent files cannot change any of it.
+# Operator config. Agents can't change anything in here.
 version: 1
 
 store: .legion/legion.db
@@ -11,11 +10,11 @@ tool_settings:
   workspace: workspace
 
 providers:
-  # Replays scripts/assistant.yaml. No model, no API key, same result every time.
+  # replays scripts/assistant.yaml, no model or key needed
   script:
     kind: scripted
     script: scripts/assistant.yaml
-  # Any OpenAI-compatible server. Ollama shown; vLLM and llama.cpp work the same way.
+  # any OpenAI-compatible server (Ollama here, vLLM/llama.cpp work too)
   local:
     kind: openai_compat
     base_url: http://localhost:11434/v1
@@ -29,7 +28,7 @@ models:
   - profile: general/default
     provider: script
     model: scripted
-  # To use a real model, move one of these above the scripted binding (first match wins).
+  # for a real model, rename one of these to general/default (first match wins)
   - profile: general/local
     provider: local
     model: llama3.1
@@ -41,7 +40,7 @@ models:
     features: [tools, prompt_caching]
 
 authority:
-  # The widest authority any agent run from this configuration can hold.
+  # the most any agent can be given
   grantable:
     - files.read:notes/**
     - files.write:out/**

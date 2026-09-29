@@ -1,9 +1,4 @@
-"""How a request to a model is authenticated, kept apart from which protocol it speaks.
-
-Phase 1 has no authentication (local inference) and API keys. Gateways with extra headers,
-workload identity and documented OAuth flows are Phase 4. Nothing here scrapes sessions or
-reuses consumer login tokens, and nothing ever will.
-"""
+# Only no-auth and API keys for now. Gateways, workload identity and OAuth come later.
 
 from __future__ import annotations
 

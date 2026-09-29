@@ -1,5 +1,5 @@
-# One model turn per entry. The meeting note contains an instruction to read a private file;
-# this script plays a model that follows it, so you can see Legion refuse the read.
+# One entry per model turn. The meeting note tells the model to read the private file, and
+# this "model" goes along with it, so you can see Legion refuse.
 - tool_calls:
     - name: list_notes
       arguments: {folder: notes}

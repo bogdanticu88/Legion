@@ -1,6 +1,3 @@
-"""Explicit state machines. A status changes only through `transition`, which refuses anything
-not in the table, so an unexpected path shows up as an error instead of a strange run."""
-
 from __future__ import annotations
 
 from enum import StrEnum

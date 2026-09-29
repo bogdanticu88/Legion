@@ -29,9 +29,7 @@ class ToolDefinition(BaseModel):
 
 
 class ModelRequest(BaseModel):
-    """Provider-neutral request. `provider_options` is keyed by provider kind; each adapter reads
-    only its own entry and may not use it to override the fields defined here."""
-
+    # provider_options: {kind: {...}}, each adapter only reads its own key
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: str
@@ -67,7 +65,6 @@ class ModelProvider(Protocol):
 def merge_options(
     body: dict[str, Any], options: dict[str, Any], reserved: frozenset[str]
 ) -> dict[str, Any]:
-    """Apply the provider escape hatch without letting it replace what Legion controls."""
     clash = reserved & options.keys()
     if clash:
         raise ConfigError(f"provider_options may not set {sorted(clash)}")

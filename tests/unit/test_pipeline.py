@@ -1,5 +1,3 @@
-"""Every step of the action pipeline, exercised through a real run on the scripted provider."""
-
 import asyncio
 import json
 from pathlib import Path
@@ -43,7 +41,7 @@ async def test_happy_path_reads_and_writes() -> None:
     assert (await h.store.verify(outcome.run_id)).ok
 
 
-async def test_model_sees_tool_results_it_asked_for() -> None:
+async def test_model_gets_tool_results() -> None:
     h = build([call("read_file", {"path": "docs/a.md"}, id="c1"), reply("done")])
     await h.run()
     last = h.provider.requests[-1].messages
@@ -76,7 +74,7 @@ async def test_refusals_are_recoverable(step: Any, code: str) -> None:
     assert code in seen.parts[0].content  # type: ignore[union-attr]
 
 
-async def test_registered_tool_not_offered_to_agent() -> None:
+async def test_tool_not_offered() -> None:
     h = build([call("write_file", {"path": "out/x", "text": "x"}), reply("ok")])
     outcome = await h.run(agent(tools=["read_file"], capabilities=["files.read:docs/**"]))
     refused = await h.payloads(outcome.run_id, E.ACTION_REFUSED)
@@ -84,7 +82,7 @@ async def test_registered_tool_not_offered_to_agent() -> None:
     assert h.files.writes == []
 
 
-async def test_policy_denies_what_the_grant_allows() -> None:
+async def test_policy_deny() -> None:
     rules = [Rule(decision=Verdict.DENY, tool="write_file", reason="read-only today")]
     h = build([call("write_file", {"path": "out/x", "text": "x"}), reply("ok")], rules=rules)
     outcome = await h.run()
@@ -123,7 +121,7 @@ async def test_external_authority_can_veto() -> None:
     assert h.files.writes == []
 
 
-async def test_kill_stops_the_run_before_the_next_effect() -> None:
+async def test_kill() -> None:
     port = VetoingAuthority()
     port.kill_after = 2
     h = build(
@@ -192,7 +190,7 @@ async def test_read_tool_retries_are_bounded() -> None:
     assert failed[-1]["disposition"] == "recoverable"
 
 
-async def test_write_timeout_is_in_doubt_and_never_retried() -> None:
+async def test_write_timeout_in_doubt() -> None:
     attempts = []
 
     @tool(
@@ -241,7 +239,7 @@ def echo_secret_tool() -> Any:
     return use_api
 
 
-async def test_secret_never_reaches_model_or_log(tmp_path: Path) -> None:
+async def test_secret_not_in_model_or_log(tmp_path: Path) -> None:
     sentinel = "sk-test-SENTINEL-4f8a9b"
     store = SqliteEventStore(tmp_path / "e.db")
     h = build(
@@ -294,7 +292,7 @@ async def test_large_output_goes_to_an_artifact() -> None:
     assert len(done["content"]) < 300
 
 
-async def test_output_schema_failure_withholds_output_but_admits_the_effect() -> None:
+async def test_bad_tool_output_is_withheld() -> None:
     @tool(
         effect=EffectClass.WRITE,
         capabilities=["files.write"],
@@ -333,7 +331,7 @@ async def test_parallel_calls_in_one_turn_run_in_order() -> None:
     assert order == [(E.TOOL_COMPLETED, "c1"), (E.ACTION_REFUSED, "c2")]
 
 
-async def test_crashing_resource_function_refuses_instead_of_crashing() -> None:
+async def test_broken_resource_fn_refuses() -> None:
     @tool(effect=EffectClass.READ, capabilities=["files.read"], resource=lambda a: a.nope)
     async def broken(args: Empty, ctx: ToolContext) -> str:
         """Resource function is wrong."""
@@ -379,7 +377,7 @@ def fatal_secret_tool() -> Any:
     return leaky
 
 
-async def test_secret_in_a_fatal_error_is_redacted_everywhere(tmp_path: Path) -> None:
+async def test_secret_redacted_on_fatal_error(tmp_path: Path) -> None:
     sentinel = "sk-test-FATAL-77aa11"
     store = SqliteEventStore(tmp_path / "e.db")
     h = build(
@@ -398,7 +396,7 @@ async def test_secret_in_a_fatal_error_is_redacted_everywhere(tmp_path: Path) ->
         assert sentinel.encode() not in path.read_bytes(), path
 
 
-async def test_cancelled_run_still_ends_with_a_terminal_event() -> None:
+async def test_cancel_records_terminal_events() -> None:
     started = asyncio.Event()
 
     @tool(

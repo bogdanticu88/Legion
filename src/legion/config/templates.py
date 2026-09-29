@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def write_project(directory: Path) -> list[Path]:
-    """Copy the starter project into `directory`. Never overwrites; returns what was created."""
+    """Copy the starter project into `directory`, skipping files that already exist."""
     created: list[Path] = []
     with as_file(files("legion.templates") / "project") as source:
         for path in sorted(source.rglob("*")):

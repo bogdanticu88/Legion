@@ -1,5 +1,3 @@
-"""Policy can only take authority away. It is asked about actions the grant already covers."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -37,9 +35,8 @@ class PolicyDecisionPoint(Protocol):
     async def evaluate(self, action: Action, context: PolicyContext) -> Decision: ...
 
 
+# all set fields must match; tool and capability are globs
 class Rule(BaseModel):
-    """Every field that is set must match. Tool and capability are glob patterns."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision: Verdict
@@ -75,9 +72,8 @@ class Rule(BaseModel):
 _PRECEDENCE = (Verdict.DENY, Verdict.REQUIRE_APPROVAL, Verdict.ALLOW)
 
 
+# deny > require_approval > allow, then `default` if nothing matched
 class RuleTablePolicy:
-    """Deny beats approval, approval beats allow. With no matching rule, `default` applies."""
-
     def __init__(
         self,
         rules: list[Rule],
@@ -89,7 +85,7 @@ class RuleTablePolicy:
             default is Verdict.REQUIRE_APPROVAL
             or any(r.decision is Verdict.REQUIRE_APPROVAL for r in rules)
         ):
-            # Refuse at load time rather than quietly turning approval into deny at run time.
+            # no approval flow yet, so fail at load time instead of silently denying later
             raise ConfigError(
                 "policy uses require_approval, but approvals are not available until phase 2"
             )

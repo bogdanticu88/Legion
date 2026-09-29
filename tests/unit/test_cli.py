@@ -144,9 +144,7 @@ def test_agent_yaml_maps_to_the_spec() -> None:
     assert spec.budget.steps == 10
 
 
-def test_template_tools_refuse_symlink_escape(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_symlink_escape_refused(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(project)
     link = project / "workspace" / "notes" / "meeting.md"
     link.unlink()

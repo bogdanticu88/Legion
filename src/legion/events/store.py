@@ -52,7 +52,6 @@ def seal(draft: EventDraft, seq: int, prev_hash: str) -> Event:
 
 
 def verify_bodies(bodies: Sequence[tuple[dict[str, Any], str]]) -> VerifyResult:
-    """Check a run's chain from stored bodies and hashes, in sequence order."""
     prev = GENESIS_HASH
     for index, (body, stored_hash) in enumerate(bodies, start=1):
         if body.get("seq") != index:

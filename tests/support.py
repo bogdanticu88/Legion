@@ -1,5 +1,3 @@
-"""Builders shared by the tests. Everything runs on the scripted provider and in memory."""
-
 from __future__ import annotations
 
 import asyncio
@@ -42,8 +40,6 @@ class WriteArgs(BaseModel):
 
 @dataclass
 class Files:
-    """An in-memory file system the example tools act on, so tests can see effects."""
-
     content: dict[str, str] = field(default_factory=dict)
     writes: list[str] = field(default_factory=list)
 

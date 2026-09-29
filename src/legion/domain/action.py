@@ -22,8 +22,6 @@ class EffectClass(StrEnum):
 
 
 class Action(BaseModel):
-    """One proposed tool call in canonical form. Policy judges it and approvals bind to its hash."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tool: str
@@ -49,5 +47,5 @@ class Action(BaseModel):
 
     @property
     def repeat_key(self) -> str:
-        """What makes two actions 'the same' for loop detection: tool and arguments only."""
+        # for loop detection only tool + arguments count
         return digest({"tool": self.tool, "arguments": self.arguments})

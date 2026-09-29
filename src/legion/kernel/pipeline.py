@@ -1,16 +1,6 @@
-"""The only code path from a model's tool call to an effect.
-
-Order is fixed and there are no hooks between steps:
-
-     1 kill check           6 budget
-     2 lookup + offered     7 credentials
-     3 schema + resource    8 execute (timeout, bounded retry by effect class)
-     4 repeat detection     9 output check, redaction, size limit
-     5 grant, policy, external authority          10 events at every step
-
-Refusals before execution are recoverable: they are recorded and the model is told. Anything
-fatal is raised to the loop after being recorded.
-"""
+# Every tool call goes through ActionPipeline.execute, in this order:
+#   kill check, lookup, schema + resource, repeat check, grant, policy, external authority,
+#   credentials, budget, run (timeout, retries), output check, redaction.
 
 from __future__ import annotations
 
@@ -22,6 +12,7 @@ import jsonschema
 
 from legion.access.secrets import Secret
 from legion.authority.policy import PolicyContext, Verdict
+from legion.canonical import canonical_json
 from legion.domain.action import Action
 from legion.domain.budget import Dimension
 from legion.domain.capability import Capability
@@ -133,11 +124,12 @@ class ActionPipeline:
         except ActionRefused:
             raise
         except Exception as exc:
-            # If we cannot tell what the call touches, we cannot check it. Refuse, do not crash.
+            # a buggy resource function shouldn't kill the run, and we can't check the call
             raise InvalidArguments(
                 f"cannot determine what this call acts on ({type(exc).__name__})"
             ) from exc
         try:
+            canonical_json(call.arguments)  # NaN etc. can't be hashed or logged
             action = Action(
                 tool=spec.name,
                 arguments=call.arguments,
@@ -147,7 +139,6 @@ class ActionPipeline:
                 grant_id=task.grant.id,
                 task_id=task.task_id,
             )
-            action.hash  # noqa: B018 - canonicalization rejects NaN and similar before anything runs
         except ValueError as exc:
             raise InvalidArguments(f"arguments cannot be checked: {exc}") from exc
         return action
@@ -318,9 +309,8 @@ class ActionPipeline:
             try:
                 jsonschema.validate(result.data, output_schema)
             except jsonschema.ValidationError as exc:
-                # The tool ran, so this is not a failure to act: saying "failed" would invite the
-                # model to repeat a write. The output is withheld because it cannot be trusted,
-                # and the validator message is left out because it quotes the offending value.
+                # The tool did run, so don't report a failure (the model might retry a write).
+                # Leave out exc.message, it quotes the bad value.
                 where = "/".join(str(p) for p in exc.absolute_path) or "output"
                 result = ToolResult(
                     content=(

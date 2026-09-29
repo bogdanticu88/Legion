@@ -1,9 +1,4 @@
-"""Canonical JSON and hashing shared by events and actions.
-
-Same form as MIA's audit chain: sorted keys, compact separators, UTC ISO timestamps. Floats are
-allowed because tool arguments contain them, but Python's float repr is the only guarantee of
-stability here, so a verifier in another language should compare hashes, not re-serialize.
-"""
+# Same canonical form as MIA's audit chain, so one verifier can check both.
 
 from __future__ import annotations
 

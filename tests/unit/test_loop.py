@@ -144,7 +144,7 @@ class Empty(BaseModel):
     pass
 
 
-async def test_wall_clock_marks_running_write_in_doubt() -> None:
+async def test_wall_clock_write_in_doubt() -> None:
     @tool(
         effect=EffectClass.WRITE,
         capabilities=["files.write"],
@@ -174,7 +174,7 @@ async def test_deadline_already_passed() -> None:
     assert outcome.error_code == "deadline_exceeded"
 
 
-async def test_check_reports_problems_before_any_event() -> None:
+async def test_check() -> None:
     h = build([reply("x")], grantable=("files.read:docs/**",))
     errors, _ = h.legion.check(agent(tools=["read_file", "nope"], capabilities=["files.read:**"]))
     assert any("unknown tools: nope" in e for e in errors)
@@ -183,7 +183,7 @@ async def test_check_reports_problems_before_any_event() -> None:
     assert any("needs files.write" in e for e in errors)
 
 
-async def test_rebuilt_state_matches_what_the_model_saw() -> None:
+async def test_projection_matches_live_transcript() -> None:
     h = build(
         [
             call("read_file", {"path": "docs/a.md"}),
@@ -201,7 +201,7 @@ async def test_rebuilt_state_matches_what_the_model_saw() -> None:
     assert not task.in_flight
 
 
-async def test_exhausted_tokens_do_not_charge_another_model_call() -> None:
+async def test_no_model_call_charged_when_out_of_tokens() -> None:
     h = build([call("read_file", {"path": "docs/a.md"}), reply("x")])
     outcome = await h.run(agent(budget=BudgetLimits(tokens=15)))
     assert outcome.error_code == "budget_exceeded"

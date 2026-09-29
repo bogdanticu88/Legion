@@ -1,9 +1,5 @@
-"""Capabilities: `name[:resource]`, where the resource is a glob.
-
-`*` matches within one path segment, `**` matches across segments. A grant without a resource
-covers every resource for that name. A requirement without a resource is only covered by a grant
-without one, so forgetting to extract a resource fails closed.
-"""
+# Capabilities look like `files.read:notes/**`. `*` stays inside one path segment, `**` crosses
+# segments. No resource on a grant means any resource.
 
 from __future__ import annotations
 
@@ -40,7 +36,7 @@ class Capability(BaseModel):
 
     def covers(self, required: Capability) -> bool:
         if required.name.endswith(".*"):
-            # Requirements are concrete. A wildcard requirement is a tool declaration bug.
+            # tools must require concrete names
             return False
         if not _name_matches(self.name, required.name):
             return False
@@ -51,7 +47,6 @@ class Capability(BaseModel):
         return resource_matches(self.resource, required.resource)
 
     def is_within(self, others: frozenset[Capability]) -> bool:
-        """True if some capability in `others` is at least as broad as this one."""
         return any(_at_least_as_broad(other, self) for other in others)
 
 
@@ -77,12 +72,8 @@ def _at_least_as_broad(wide: Capability, narrow: Capability) -> bool:
 
 
 def glob_contains(wide: str, narrow: str) -> bool:
-    """True only when every resource `narrow` matches is also matched by `wide`.
-
-    General glob containment is not attempted. Three cases are decided, anything else is refused,
-    which errs towards less authority: identical patterns; a literal that `wide` matches; and
-    `wide` being a literal prefix followed by `**` while `narrow`'s literal prefix extends it.
-    """
+    # Does `wide` match everything `narrow` matches? Only the easy cases are decided (same
+    # pattern, literal narrow, `prefix/**` wide). Anything else returns False.
     if wide == narrow:
         return True
     if not _has_glob(narrow):

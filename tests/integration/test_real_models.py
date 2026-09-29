@@ -1,8 +1,5 @@
-"""The same agent against real endpoints. Skipped unless configured; see CONTRIBUTING.md.
-
-These check that the adapters work against the real wire protocol, not that a model behaves a
-particular way, so they only assert that the run ends and the chain verifies.
-"""
+# Needs a real endpoint, see CONTRIBUTING.md. Only checks the adapters speak the protocol,
+# not what the model decides.
 
 import os
 
@@ -47,7 +44,7 @@ def make(kind: str) -> ModelProvider:
 
 
 @pytest.mark.parametrize(("kind", "model"), providers())
-async def test_agent_runs_unchanged_on_a_real_model(kind: str, model: str) -> None:
+async def test_real_model(kind: str, model: str) -> None:
     if kind == "none":
         pytest.skip("no real model endpoint configured")
     if not model:

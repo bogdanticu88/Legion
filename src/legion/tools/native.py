@@ -1,16 +1,3 @@
-"""Python functions as tools. The argument model supplies the JSON schema.
-
-    class ReadArgs(BaseModel):
-        path: str
-
-    @tool(effect=EffectClass.READ, capabilities=["files.read"], resource=lambda a: a.path)
-    async def read_file(args: ReadArgs, ctx: ToolContext) -> str:
-        ...
-
-Native tools run inside the harness process. The pipeline decides whether they run; it cannot
-limit what their code does once it runs.
-"""
-
 from __future__ import annotations
 
 import asyncio

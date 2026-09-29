@@ -16,7 +16,7 @@ class Args(BaseModel):
     limit: int = 10
 
 
-async def test_native_tool_derives_schema_and_runs() -> None:
+async def test_native_tool() -> None:
     @tool(effect=EffectClass.READ, capabilities=["files.read"], resource_arg="path")
     async def read(args: Args, ctx: ToolContext) -> dict[str, object]:
         """Read something.
@@ -60,7 +60,7 @@ def test_resource_extraction_validates() -> None:
         {"name": "ok", "effect": EffectClass.READ, "capabilities": ("Files",)},
     ],
 )
-def test_spec_rejects_undeclared_or_bad_declarations(kw: dict[str, object]) -> None:
+def test_bad_specs_rejected(kw: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         ToolSpec(description="d", input_schema={"type": "object"}, **kw)  # type: ignore[arg-type]
 
@@ -104,7 +104,7 @@ async def test_secrets_do_not_print() -> None:
         SecretRef.parse("file:/etc/passwd")
 
 
-def test_invalid_schemas_are_rejected_at_registration() -> None:
+def test_invalid_schema_rejected() -> None:
     with pytest.raises(ValidationError, match="invalid schema"):
         ToolSpec(
             name="t",

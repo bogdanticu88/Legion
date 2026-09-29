@@ -16,8 +16,6 @@ class AttenuationError(ConfigError):
 
 
 class Grant(BaseModel):
-    """The authority a task runs under. Immutable; a narrower one is derived with `attenuate`."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
@@ -35,7 +33,7 @@ class Grant(BaseModel):
     @field_validator("capabilities", mode="before")
     @classmethod
     def _parse(cls, value: Any) -> Any:
-        # Events store capabilities as strings; a grant read back from the log must round-trip.
+        # capabilities are stored as strings in events
         if isinstance(value, list | tuple | set | frozenset):
             return frozenset(Capability.parse(v) if isinstance(v, str) else v for v in value)
         return value
@@ -56,7 +54,6 @@ class Grant(BaseModel):
         issuer: str,
         expires_at: datetime | None = None,
     ) -> Grant:
-        """Derive a child grant. Raises unless every part is at most what this grant holds."""
         wider = [str(cap) for cap in capabilities if not cap.is_within(self.capabilities)]
         if wider:
             raise AttenuationError(f"child capabilities exceed parent: {sorted(wider)}")

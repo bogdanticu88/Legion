@@ -9,8 +9,6 @@ from legion.domain.principal import Principal
 
 
 class TaskSpec(BaseModel):
-    """What a task asks for. Its status lives in the event log, not on this object."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str

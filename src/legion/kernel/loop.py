@@ -1,6 +1,3 @@
-"""The agent loop for one task: ask the model, run what it asks for through the pipeline, repeat
-until it answers without tool calls or a limit stops it."""
-
 from __future__ import annotations
 
 import json
@@ -43,8 +40,7 @@ class AgentLoop:
             response = await self._call_model(task, self._request(task))
             calls = response.message.tool_calls
             if calls:
-                # Sequential on purpose in Phase 1: ordering is part of the record, and parallel
-                # tool calls arrive with the scheduler in Phase 3.
+                # sequential for now; parallel calls come with the Phase 3 scheduler
                 for call in calls:
                     await self.pipeline.execute(call, task)
                 continue
@@ -72,7 +68,7 @@ class AgentLoop:
         max_tokens = agent.max_output_tokens
         remaining = self.k.ledger(task).remaining(Dimension.TOKENS)
         if remaining is not None:
-            # Cap the answer by what is left, so one call cannot overshoot by more than it has.
+            # don't let one answer blow through the rest of the token budget
             max_tokens = max(1, min(max_tokens, int(remaining)))
         features = task.model.features
         return ModelRequest(
