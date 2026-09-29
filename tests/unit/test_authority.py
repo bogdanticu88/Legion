@@ -9,7 +9,7 @@ from legion.domain.action import Action, EffectClass
 from legion.domain.budget import BudgetLimits, Dimension
 from legion.domain.capability import Capability
 from legion.domain.errors import BudgetExceeded
-from legion.domain.grant import AttenuationError, Grant
+from legion.domain.grant import AttenuationError, DelegationLimits, Grant
 from legion.domain.principal import IdentityContext
 from legion.events.projections import RunState
 from tests.support import PRINCIPAL
@@ -18,7 +18,15 @@ C = Capability.parse
 IDENTITY = IdentityContext(principal=PRINCIPAL, agent_ref="a")
 
 
-def grant(*caps: str, budget: BudgetLimits | None = None, expires: datetime | None = None) -> Grant:
+CAN_DELEGATE = DelegationLimits(max_depth=2, max_children=3)
+
+
+def grant(
+    *caps: str,
+    budget: BudgetLimits | None = None,
+    expires: datetime | None = None,
+    delegation: DelegationLimits = CAN_DELEGATE,
+) -> Grant:
     return Grant(
         id="g1",
         capabilities=frozenset(C(c) for c in caps),
@@ -26,6 +34,7 @@ def grant(*caps: str, budget: BudgetLimits | None = None, expires: datetime | No
         identity=IDENTITY,
         issuer="test",
         expires_at=expires,
+        delegation=delegation,
     )
 
 
@@ -83,8 +92,7 @@ class TestGrant:
             id="g2",
             capabilities=frozenset({C("files.read:notes/a.md")}),
             budget=BudgetLimits(steps=5, model_calls=5, tool_calls=5, tokens=100, wall_seconds=10),
-            identity=IDENTITY,
-            issuer="test",
+            agent_ref="child",
         )
         assert child.parent_id == "g1"
         assert child.covers(C("files.read:notes/a.md"))
@@ -96,22 +104,27 @@ class TestGrant:
                 id="g2",
                 capabilities=frozenset({C("files.read")}),
                 budget=BudgetLimits(),
-                identity=IDENTITY,
-                issuer="test",
+                agent_ref="child",
             )
 
     @pytest.mark.parametrize("budget", [BudgetLimits(steps=21), BudgetLimits(tokens=None)])
     def test_attenuate_refuses_wider_budget(self, budget: BudgetLimits) -> None:
         with pytest.raises(AttenuationError):
             grant("a.b").attenuate(
-                id="g2", capabilities=frozenset(), budget=budget, identity=IDENTITY, issuer="t"
+                id="g2",
+                capabilities=frozenset(),
+                budget=budget,
+                agent_ref="child",
             )
 
     def test_attenuate_expiry(self) -> None:
         now = datetime.now(UTC)
         parent = grant("a.b", expires=now)
         inherited = parent.attenuate(
-            id="g2", capabilities=frozenset(), budget=BudgetLimits(), identity=IDENTITY, issuer="t"
+            id="g2",
+            capabilities=frozenset(),
+            budget=BudgetLimits(),
+            agent_ref="child",
         )
         assert inherited.expires_at == now
         with pytest.raises(AttenuationError):
@@ -119,10 +132,50 @@ class TestGrant:
                 id="g3",
                 capabilities=frozenset(),
                 budget=BudgetLimits(),
-                identity=IDENTITY,
-                issuer="t",
+                agent_ref="child",
                 expires_at=now + timedelta(seconds=1),
             )
+
+    def test_child_identity_is_derived(self) -> None:
+        child = grant("a.b").attenuate(
+            id="g2", capabilities=frozenset(), budget=BudgetLimits(), agent_ref="child"
+        )
+        assert child.identity.principal == PRINCIPAL
+        assert child.identity.agent_ref == "child"
+        assert child.identity.on_behalf_of == ("a",)
+        assert child.issuer == "delegation:g1" and child.depth == 1
+
+    def test_no_delegation_without_depth(self) -> None:
+        with pytest.raises(AttenuationError, match="does not allow"):
+            grant("a.b", delegation=DelegationLimits()).attenuate(
+                id="g2", capabilities=frozenset(), budget=BudgetLimits(), agent_ref="c"
+            )
+
+    @pytest.mark.parametrize(
+        "limits", [DelegationLimits(max_depth=2), DelegationLimits(max_depth=1, max_children=4)]
+    )
+    def test_child_delegation_rights_shrink(self, limits: DelegationLimits) -> None:
+        with pytest.raises(AttenuationError):
+            grant("a.b").attenuate(
+                id="g2",
+                capabilities=frozenset(),
+                budget=BudgetLimits(),
+                agent_ref="c",
+                delegation=limits,
+            )
+
+    def test_depth_runs_out(self) -> None:
+        g = grant("a.b")
+        for level in range(2):
+            g = g.attenuate(
+                id=f"g{level}",
+                capabilities=frozenset(),
+                budget=BudgetLimits(),
+                agent_ref=f"c{level}",
+                delegation=DelegationLimits(max_depth=1 - level, max_children=3),
+            )
+        with pytest.raises(AttenuationError, match="does not allow"):
+            g.attenuate(id="gx", capabilities=frozenset(), budget=BudgetLimits(), agent_ref="x")
 
 
 class TestLedger:

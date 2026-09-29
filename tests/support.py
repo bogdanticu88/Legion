@@ -152,6 +152,10 @@ def build(
     settings: dict[str, str] | None = None,
     by_turn: bool = False,
     approval_ttl: timedelta = timedelta(hours=1),
+    agents: dict[str, AgentSpec] | None = None,
+    scripts: dict[str, Sequence[Step]] | None = None,
+    max_tasks: int = 16,
+    max_delegation_depth: int = 2,
 ) -> Harness:
     args = dict(locals())
     files = files or Files({"docs/a.md": "alpha", "secret/b.md": "beta"})
@@ -160,15 +164,21 @@ def build(
     sleeps = Sleeps()
     artifacts = MemoryArtifactStore()
     store = store or MemoryEventStore()
+    # one scripted model per extra profile, so each agent in a delegation has its own script
+    bindings = [
+        ModelBinding(
+            profile="general/default", provider="script", model="scripted", pricing=pricing
+        )
+    ]
+    providers: dict[str, Any] = {"script": provider}
+    for profile, profile_steps in (scripts or {}).items():
+        name = profile.replace("/", "-")
+        providers[name] = ScriptedProvider(profile_steps, by_turn=by_turn)
+        bindings.append(
+            ModelBinding(profile=profile, provider=name, model="scripted", pricing=pricing)
+        )
     legion = Legion(
-        resolver=ModelResolver(
-            [
-                ModelBinding(
-                    profile="general/default", provider="script", model="scripted", pricing=pricing
-                )
-            ],
-            {"script": provider},
-        ),
+        resolver=ModelResolver(bindings, providers),
         tools=registry,
         store=store,
         policy=policy or RuleTablePolicy(rules if rules is not None else default_rules()),
@@ -183,6 +193,9 @@ def build(
         now=now or (lambda: datetime.now(UTC)),
         settings=settings,
         approval_ttl=approval_ttl,
+        agents=agents,
+        max_tasks=max_tasks,
+        max_delegation_depth=max_delegation_depth,
     )
 
     def rebuild(**changes: Any) -> Harness:

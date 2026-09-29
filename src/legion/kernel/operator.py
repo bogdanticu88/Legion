@@ -7,7 +7,7 @@ from typing import Literal
 
 from legion.domain.errors import LegionError
 from legion.domain.principal import Principal
-from legion.domain.states import is_terminal_run
+from legion.domain.states import is_terminal_run, is_terminal_task
 from legion.events import types as ev
 from legion.events.projections import ApprovalView, RunState
 from legion.events.store import EventStore
@@ -112,10 +112,10 @@ async def reconcile(
         state = await load_state(store, run_id)
         if is_terminal_run(state.status):
             raise OperatorError(f"run {run_id} already {state.status.value}")
-        assert state.root_task_id is not None
-        view = state.tasks[state.root_task_id]
-        if call_id not in view.in_doubt:
+        owners = [v for v in state.tasks.values() if call_id in v.in_doubt]
+        if not owners:
             raise OperatorError(f"call {call_id} is not in doubt in run {run_id}")
+        view = owners[0]
         action_hash, _ = view.in_doubt[call_id]
         recorder = Recorder(store, state)
         if outcome == "abandon":
@@ -124,10 +124,21 @@ async def reconcile(
                 message=f"{by} abandoned the run instead of reconciling call {call_id}",
                 disposition="fatal",
             )
+            # every open task ends, deepest first, then the run
+            open_tasks = [
+                v for v in reversed(list(state.tasks.values())) if not is_terminal_task(v.status)
+            ]
             await recorder.append(
                 [
-                    recorder.draft(
-                        EventType.TASK_FAILED, failure, task_id=view.id, agent_id=state.agent
+                    *(
+                        recorder.draft(
+                            EventType.TASK_FAILED,
+                            failure,
+                            task_id=v.id,
+                            agent_id=v.agent,
+                            parent_task_id=v.parent_id,
+                        )
+                        for v in open_tasks
                     ),
                     recorder.draft(EventType.RUN_FAILED, failure),
                 ]
@@ -139,7 +150,8 @@ async def reconcile(
                 call_id=call_id, action_hash=action_hash, outcome=outcome, by=str(by), note=note
             ),
             task_id=view.id,
-            agent_id=state.agent,
+            agent_id=view.agent,
+            parent_task_id=view.parent_id,
             correlation={"action_hash": action_hash},
         )
         return state

@@ -45,6 +45,7 @@ from legion.domain.messages import ToolCallPart
 from legion.events import types as ev
 from legion.events.types import EventType
 from legion.kernel import approvals
+from legion.kernel.delegation import ChildPlan, DelegateTool, DelegationRefused
 from legion.kernel.services import Kernel, TaskRuntime, redact_text
 from legion.tools.base import Tool, ToolContext, ToolResult
 
@@ -110,10 +111,13 @@ class ActionPipeline:
                 action,
             )
 
-        refusal = await self._authorize(call, action, task, tool)
+        refusal, plan = await self._authorize(call, action, task, tool)
         if refusal is not None:
             return await self._refuse(task, call, refusal, action)
 
+        if plan is not None:
+            await self._delegate(tool, call, action, task, plan)
+            return None
         secrets = await self._credentials(tool)
         await self._run(tool, call, action, task, secrets)
         return None
@@ -151,28 +155,37 @@ class ActionPipeline:
 
     async def _authorize(
         self, call: ToolCallPart, action: Action, task: TaskRuntime, tool: Tool
-    ) -> ActionRefused | None:
+    ) -> tuple[ActionRefused | None, ChildPlan | None]:
         if task.grant.expired(self.k.now()):
             raise GrantExpired(f"grant {task.grant.id} has expired")
         missing = [str(c) for c in action.required if not task.grant.covers(c)]
         if missing:
-            return CapabilityDenied(f"the task's grant does not cover {', '.join(missing)}")
+            return CapabilityDenied(f"the task's grant does not cover {', '.join(missing)}"), None
 
         decision = await self.k.policy.evaluate(
             action, PolicyContext(grant=task.grant, agent=task.agent.name, task_id=task.task_id)
         )
         if decision.verdict is Verdict.DENY:
-            return PolicyDenied("; ".join(decision.reasons) or "denied by policy")
+            return PolicyDenied("; ".join(decision.reasons) or "denied by policy"), None
 
         external = await self.k.identity.authorize(action, task.identity)
         if not external.allowed:
-            return PolicyDenied(f"{external.source}: {external.reason or 'denied'}")
+            return PolicyDenied(f"{external.source}: {external.reason or 'denied'}"), None
+
+        plan = None
+        if isinstance(tool, DelegateTool):
+            if self.k.delegator is None:
+                return DelegationRefused("delegation isn't set up for this run"), None
+            planned = self.k.delegator.plan(call, task)
+            if isinstance(planned, ActionRefused):
+                return planned, None
+            plan = planned
 
         # Only ask a human once everything else has said yes.
         if decision.verdict is Verdict.REQUIRE_APPROVAL:
             refusal = await self._approval(call, action, task, tool)
             if refusal is not None:
-                return refusal
+                return refusal, None
 
         await self.k.emit(
             task,
@@ -184,7 +197,37 @@ class ActionPipeline:
             ),
             correlation={"action_hash": action.hash},
         )
-        return None
+        return None, plan
+
+    async def _delegate(
+        self, tool: Tool, call: ToolCallPart, action: Action, task: TaskRuntime, plan: ChildPlan
+    ) -> None:
+        # Same bookkeeping as any tool call, but the "tool" is a child task run by the harness.
+        # No timeout or retry here: the child has its own budget, and a pause or crash is
+        # picked up again through the parent's call.
+        assert self.k.delegator is not None
+        if not plan.existing:
+            # Charged once, when the child is made. Picking an existing child back up after a
+            # pause or crash is free; otherwise a child given everything the parent had left
+            # could never be resumed.
+            ledger = self.k.ledger(task)
+            try:
+                ledger.precheck(Dimension.TOOL_CALLS)
+            except BudgetExceeded as exc:
+                await self._exceeded(task, exc)
+                raise
+            record, _ = ledger.charge(Dimension.TOOL_CALLS, 1)
+            await self.k.emit(task, EventType.BUDGET_CONSUMED, record)
+        await self.k.check_kill(task)
+        await self.k.emit(
+            task,
+            EventType.TOOL_STARTED,
+            ev.ToolStarted(call_id=call.id, action_hash=action.hash, attempt=1),
+            {"action_hash": action.hash},
+        )
+        started = time.monotonic()
+        result = await self.k.delegator.run(call, task, plan)
+        await self._complete(tool, task, call, action, result, {}, started, 1)
 
     async def _approval(
         self, call: ToolCallPart, action: Action, task: TaskRuntime, tool: Tool

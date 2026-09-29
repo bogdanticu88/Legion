@@ -64,6 +64,8 @@ class ProviderConfig(_Strict):
 
 class AuthorityConfig(_Strict):
     grantable: list[str] = Field(default_factory=list)
+    max_delegation_depth: int = Field(default=2, ge=0, le=8)
+    max_tasks: int = Field(default=16, ge=1, le=256)
 
 
 class PolicyConfig(_Strict):
@@ -86,6 +88,8 @@ class LegionConfig(_Strict):
     store: str = ".legion/legion.db"
     artifacts: str = ".legion/artifacts"
     tool_modules: list[str] = Field(default_factory=list)
+    # agents that can be delegated to, one YAML file each
+    agents_dir: str | None = "agents"
     tool_settings: dict[str, str] = Field(default_factory=dict)
     providers: dict[str, ProviderConfig]
     models: list[ModelBinding]
@@ -152,7 +156,24 @@ class Loaded:
             config_hash=self.config_hash,
             locks=self.locks(),
             approval_ttl=timedelta(seconds=self.config.approvals.ttl_seconds),
+            agents=self.agents(),
+            max_delegation_depth=self.config.authority.max_delegation_depth,
+            max_tasks=self.config.authority.max_tasks,
         )
+
+    def agents(self) -> dict[str, AgentSpec]:
+        if self.config.agents_dir is None:
+            return {}
+        directory = self.resolve_path(self.config.agents_dir)
+        if not directory.is_dir():
+            return {}
+        catalog: dict[str, AgentSpec] = {}
+        for path in sorted(directory.glob("*.yaml")):
+            spec = load_agent(path)
+            if spec.name in catalog:
+                raise ConfigError(f"two agents are called {spec.name!r} in {directory}")
+            catalog[spec.name] = spec
+        return catalog
 
     async def aclose(self) -> None:
         for provider in self.providers.values():

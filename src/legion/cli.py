@@ -21,9 +21,10 @@ from legion.config.templates import write_project
 from legion.domain.errors import LegionError
 from legion.domain.principal import Principal, PrincipalKind
 from legion.domain.states import RunStatus
+from legion.events.projections import TaskView
 from legion.events.types import Event, EventType
 from legion.kernel import operator
-from legion.kernel.runtime import RunOutcome
+from legion.kernel.runtime import RunOutcome, load_state
 
 app = typer.Typer(help="Legion: run agents through one enforcement path.", no_args_is_help=True)
 agent_app = typer.Typer(help="Work with agent definitions.", no_args_is_help=True)
@@ -430,6 +431,46 @@ def inspect(
             time = event.ts.strftime("%H:%M:%S.%f")[:-3]
             kind = f"[bold]{event.type.value:<18}[/bold]"
             out.print(f"{event.seq:>4} {time} {kind} {_safe(describe(event))}", highlight=False)
+
+
+@app.command()
+def tasks(run_id: str, config: ConfigOption = Path("legion.yaml")) -> None:
+    """Show a run's tasks: who handed work to whom, where each one is, and what it used."""
+    loaded = _load(config)
+    store = loaded.store()
+    try:
+        state = _run(load_state(store, run_id))
+    except LegionError as exc:
+        err.print(f"[red]error:[/red] {_safe(exc.message)}")
+        raise typer.Exit(2) from exc
+    finally:
+        store.close()
+    table = Table(
+        Column("task", no_wrap=True), "agent", "status", "via call", "tool calls", "model calls"
+    )
+
+    def usage(view: TaskView, dimension: str) -> str:
+        grant = view.grant if view.parent_id else state.grant
+        limit = (grant or {}).get("budget", {}).get(dimension)
+        used = state.used(view.grant_id, dimension) + state.committed(view.grant_id, dimension)
+        return f"{used}/{limit if limit is not None else '-'}"
+
+    def walk(task_id: str, depth: int) -> None:
+        view = state.tasks[task_id]
+        table.add_row(
+            "  " * depth + view.id,
+            _safe(view.agent),
+            view.status.value,
+            _safe(view.delegated_by or "-"),
+            usage(view, "tool_calls"),
+            usage(view, "model_calls"),
+        )
+        for child_id in view.children.values():
+            walk(child_id, depth + 1)
+
+    if state.root_task_id in state.tasks:
+        walk(state.root_task_id, 0)
+    out.print(table)
 
 
 @app.command()

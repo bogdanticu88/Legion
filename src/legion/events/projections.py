@@ -18,6 +18,8 @@ from legion.events.types import (
     ActionRefused,
     ApprovalConsumed,
     ApprovalRequested,
+    BudgetReserved,
+    BudgetSettled,
     Event,
     EventType,
     Failure,
@@ -75,6 +77,14 @@ class TaskView:
     last_message: Message | None = None
     last_stop: str | None = None
     awaiting_finish: bool = False
+    # delegation: set on child tasks, and the parent's call -> child mapping
+    grant: dict[str, Any] | None = None
+    agent_spec: dict[str, Any] | None = None
+    provider: str | None = None
+    model: str | None = None
+    delegated_by: str | None = None
+    children: dict[str, str] = field(default_factory=dict)
+    settled: bool = False
 
     def open_calls(self) -> list[str]:
         if self.last_message is None:
@@ -128,6 +138,11 @@ class RunState:
     error: Failure | None = None
     tasks: dict[str, TaskView] = field(default_factory=dict)
     consumed: dict[tuple[str, str], Decimal] = field(default_factory=dict)
+    # held back for children still running, and what finished children actually used
+    reserved: dict[tuple[str, str], Decimal] = field(default_factory=dict)
+    child_used: dict[tuple[str, str], Decimal] = field(default_factory=dict)
+    # (parent grant, child task, dimension) -> amount still held for that child
+    reservations: dict[tuple[str, str, str], Decimal] = field(default_factory=dict)
     approvals: dict[str, ApprovalView] = field(default_factory=dict)
     paused: Paused | None = None
     # start of the current active stretch, for wall-clock accounting across pauses and crashes
@@ -143,7 +158,12 @@ class RunState:
         return state
 
     def used(self, grant_id: str, dimension: str) -> Decimal:
+        # what this grant spent itself; see committed() for what its children hold
         return self.consumed.get((grant_id, dimension), Decimal(0))
+
+    def committed(self, grant_id: str, dimension: str) -> Decimal:
+        key = (grant_id, dimension)
+        return self.reserved.get(key, Decimal(0)) + self.child_used.get(key, Decimal(0))
 
     def apply(self, event: Event) -> None:
         if event.run_id != self.run_id:
@@ -191,6 +211,15 @@ def _task_created(state: RunState, event: Event) -> None:
         raise ValueError("task.created needs a new task id")
     view = TaskView(event.task_id, p.agent, p.grant_id, p.task, event.parent_task_id)
     view.transcript.append(user_text(initial_prompt(p.task)))
+    view.grant, view.agent_spec, view.delegated_by = p.grant, p.agent_spec, p.delegated_by
+    view.provider, view.model = p.provider, p.model
+    if event.parent_task_id is not None:
+        parent = state.tasks.get(event.parent_task_id)
+        if parent is None or p.delegated_by is None or p.grant is None:
+            raise ValueError(f"child task {event.task_id} has no valid parent or grant")
+        if p.delegated_by in parent.children:
+            raise ValueError(f"call {p.delegated_by} already created a child")
+        parent.children[p.delegated_by] = event.task_id
     state.tasks[event.task_id] = view
 
 
@@ -346,6 +375,30 @@ def _output_rejected(state: RunState, event: Event) -> None:
     view.transcript.append(user_text(rejection_prompt(p.reason)))
 
 
+def _budget_reserved(state: RunState, event: Event) -> None:
+    p = BudgetReserved.model_validate(event.payload)
+    key = (p.grant_id, p.dimension)
+    state.reserved[key] = state.reserved.get(key, Decimal(0)) + p.amount
+    child_key = (p.grant_id, p.child_task_id, p.dimension)
+    if child_key in state.reservations:
+        raise ValueError(f"{p.dimension} already reserved for {p.child_task_id}")
+    state.reservations[child_key] = p.amount
+
+
+def _budget_settled(state: RunState, event: Event) -> None:
+    p = BudgetSettled.model_validate(event.payload)
+    key = (p.grant_id, p.dimension)
+    held = state.reservations.pop((p.grant_id, p.child_task_id, p.dimension), None)
+    if held is None or held != p.reserved:
+        raise ValueError(f"settlement for {p.child_task_id} doesn't match its reservation")
+    state.reserved[key] = state.reserved.get(key, Decimal(0)) - p.reserved
+    state.child_used[key] = state.child_used.get(key, Decimal(0)) + p.used
+    child = state.tasks.get(p.child_task_id)
+    if child is None:
+        raise ValueError(f"settlement for unknown child {p.child_task_id}")
+    child.settled = True
+
+
 def _budget_consumed(state: RunState, event: Event) -> None:
     grant_id = str(event.payload["grant_id"])
     dimension = str(event.payload["dimension"])
@@ -368,6 +421,9 @@ _HANDLERS: dict[EventType, Any] = {
     EventType.TASK_AWAITING_APPROVAL: _task_status(TaskStatus.AWAITING_APPROVAL),
     EventType.TASK_BLOCKED: _task_status(TaskStatus.BLOCKED),
     EventType.TASK_RESUMED: _task_status(TaskStatus.RUNNING),
+    EventType.TASK_WAITING: _task_status(TaskStatus.WAITING_CHILDREN),
+    EventType.BUDGET_RESERVED: _budget_reserved,
+    EventType.BUDGET_SETTLED: _budget_settled,
     EventType.MODEL_RESPONDED: _model_responded,
     EventType.ACTION_PROPOSED: _action_proposed,
     EventType.ACTION_REFUSED: _action_refused,

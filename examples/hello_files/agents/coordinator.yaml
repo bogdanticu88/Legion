@@ -1,0 +1,23 @@
+name: coordinator
+description: Splits a job up and hands the parts to other agents.
+instructions: |
+  Hand the summarising to notes-assistant with delegate. Give it only what it needs. Then say
+  what it did.
+model:
+  profile: demo/coordinator
+  needs: [tools]
+tools: [delegate]
+capabilities:
+  - agent.delegate:notes-assistant
+  # a child can only get capabilities its parent holds
+  - files.read:notes/**
+  - files.write:out/**
+delegation:
+  max_depth: 1
+  max_children: 2
+budget:
+  steps: 20
+  model_calls: 24
+  tool_calls: 16
+  tokens: 120000
+  wall_seconds: 180

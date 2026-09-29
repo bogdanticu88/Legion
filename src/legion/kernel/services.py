@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from legion.access.secrets import CredentialResolver, SecretRef
 from legion.artifacts import ArtifactStore
@@ -20,6 +21,9 @@ from legion.events.types import Event, EventDraft, EventType, _Payload, draft
 from legion.models.resolver import Resolved
 from legion.ports.identity import AgentIdentity, IdentityPort, KillState
 from legion.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from legion.kernel.delegation import Delegator
 
 Sleep = Callable[[float], Awaitable[None]]
 # Called at named points ("before:tool.started", "tool:after_invoke", ...). Tests use it to stop
@@ -157,6 +161,8 @@ class TaskRuntime:
     identity: AgentIdentity
     model: Resolved
     deadline: datetime | None = None
+    # identities of every ancestor task, outermost first; empty for the root
+    lineage: tuple[AgentIdentity, ...] = ()
 
     @property
     def offered(self) -> frozenset[str]:
@@ -177,6 +183,12 @@ class Kernel:
     sleep: Sleep
     approval_ttl: timedelta = timedelta(hours=1)
     now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
+    delegator: Delegator | None = None
+    # monotonic start of the current active stretch, for wall time that isn't recorded yet
+    stretch_started: float | None = None
+
+    def stretch_elapsed(self) -> float:
+        return 0.0 if self.stretch_started is None else time.monotonic() - self.stretch_started
 
     @property
     def faults(self) -> Faults:
@@ -216,5 +228,7 @@ class Kernel:
         )
 
     async def check_kill(self, task: TaskRuntime) -> None:
-        if await self.identity.kill_state(task.identity) is KillState.KILLED:
-            raise Killed(f"{task.identity.source} reports agent {task.identity.agent_ref} killed")
+        # a killed ancestor stops its whole subtree
+        for identity in (*task.lineage, task.identity):
+            if await self.identity.kill_state(identity) is KillState.KILLED:
+                raise Killed(f"{identity.source} reports agent {identity.agent_ref} killed")

@@ -17,6 +17,9 @@ providers:
   publish-script:
     kind: scripted
     script: scripts/publisher.yaml
+  coordinator-script:
+    kind: scripted
+    script: scripts/coordinator.yaml
   # any OpenAI-compatible server (Ollama here, vLLM/llama.cpp work too)
   local:
     kind: openai_compat
@@ -33,6 +36,9 @@ models:
     model: scripted
   - profile: demo/publisher
     provider: publish-script
+    model: scripted
+  - profile: demo/coordinator
+    provider: coordinator-script
     model: scripted
   # for a real model, rename one of these to general/default (first match wins)
   - profile: general/local
@@ -51,6 +57,10 @@ authority:
     - files.read:notes/**
     - files.write:out/**
     - notes.publish:team
+    - agent.delegate:notes-assistant
+  # how deep delegation can go, and how many tasks one run may have
+  max_delegation_depth: 2
+  max_tasks: 16
 
 policy:
   default: allow

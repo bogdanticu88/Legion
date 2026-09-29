@@ -31,6 +31,7 @@ class EventType(StrEnum):
     TASK_AWAITING_APPROVAL = "task.awaiting_approval"
     TASK_BLOCKED = "task.blocked"
     TASK_RESUMED = "task.resumed"
+    TASK_WAITING = "task.waiting"
     MODEL_REQUESTED = "model.requested"
     MODEL_RESPONDED = "model.responded"
     MODEL_FAILED = "model.failed"
@@ -52,6 +53,8 @@ class EventType(StrEnum):
     TOOL_FAILED = "tool.failed"
     BUDGET_CONSUMED = "budget.consumed"
     BUDGET_EXCEEDED = "budget.exceeded"
+    BUDGET_RESERVED = "budget.reserved"
+    BUDGET_SETTLED = "budget.settled"
     OUTPUT_REJECTED = "output.rejected"
 
 
@@ -93,6 +96,12 @@ class TaskCreated(_Payload):
     task: dict[str, Any]
     grant_id: str
     agent: str
+    # set for child tasks; a root task's grant and spec are in run.created
+    grant: dict[str, Any] | None = None
+    agent_spec: dict[str, Any] | None = None
+    provider: str | None = None
+    model: str | None = None
+    delegated_by: str | None = None
 
 
 class TaskCompleted(_Payload):
@@ -291,6 +300,27 @@ class ApprovalInvalidated(_Payload):
     reason: str
 
 
+class Waiting(_Payload):
+    child_task_id: str
+
+
+class BudgetReserved(_Payload):
+    grant_id: str
+    child_grant_id: str
+    child_task_id: str
+    dimension: str
+    amount: Decimal
+
+
+class BudgetSettled(_Payload):
+    grant_id: str
+    child_grant_id: str
+    child_task_id: str
+    dimension: str
+    reserved: Decimal
+    used: Decimal
+
+
 class OutputRejected(_Payload):
     attempt: int
     reason: str
@@ -326,6 +356,9 @@ PAYLOADS: dict[EventType, type[_Payload]] = {
     EventType.TASK_AWAITING_APPROVAL: AwaitingApproval,
     EventType.TASK_BLOCKED: Blocked,
     EventType.TASK_RESUMED: Empty,
+    EventType.TASK_WAITING: Waiting,
+    EventType.BUDGET_RESERVED: BudgetReserved,
+    EventType.BUDGET_SETTLED: BudgetSettled,
     EventType.ACTION_INTERRUPTED: ActionInterrupted,
     EventType.ACTION_RECONCILED: ActionReconciled,
     EventType.APPROVAL_REQUESTED: ApprovalRequested,

@@ -16,6 +16,7 @@ from pydantic import (
 from legion.canonical import digest
 from legion.domain.budget import BudgetLimits
 from legion.domain.capability import Capability
+from legion.domain.grant import DelegationLimits
 
 _AGENT_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _PROFILE = re.compile(r"^[a-z0-9_-]+(/[a-z0-9_-]+)*$")
@@ -56,6 +57,9 @@ class AgentSpec(BaseModel):
     capabilities: tuple[Capability, ...] = ()
     budget: BudgetLimits = BudgetLimits()
     output_schema: dict[str, Any] | None = None
+    # how much this agent may delegate when it's the root of a run; as a child it gets at most
+    # what its parent allows
+    delegation: DelegationLimits = DelegationLimits()
     max_output_tokens: int = Field(default=4096, gt=0)
 
     @field_validator("name")

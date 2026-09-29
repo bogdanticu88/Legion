@@ -16,8 +16,14 @@ class Ledger:
         self.grant = grant
         self.state = state
 
-    def used(self, dimension: Dimension) -> Decimal:
+    def own(self, dimension: Dimension) -> Decimal:
         return self.state.used(self.grant.id, dimension.value)
+
+    def used(self, dimension: Dimension) -> Decimal:
+        # Own spending plus everything handed to children: reserved while they run, what they
+        # really used once they've finished. This is what the limit is checked against, so
+        # delegating can't create budget.
+        return self.own(dimension) + self.state.committed(self.grant.id, dimension.value)
 
     def remaining(self, dimension: Dimension) -> Decimal | None:
         limit = self.grant.budget.limit(dimension)
@@ -32,9 +38,10 @@ class Ledger:
             raise BudgetExceeded(dimension.value, limit, attempted)
 
     def charge(self, dimension: Dimension, amount: Decimal | int) -> tuple[BudgetConsumed, bool]:
-        total = self.used(dimension) + Decimal(amount)
+        total = self.own(dimension) + Decimal(amount)
         limit = self.grant.budget.limit(dimension)
         record = BudgetConsumed(
             grant_id=self.grant.id, dimension=dimension.value, amount=Decimal(amount), total=total
         )
-        return record, limit is not None and total > Decimal(limit)
+        committed = self.state.committed(self.grant.id, dimension.value)
+        return record, limit is not None and total + committed > Decimal(limit)

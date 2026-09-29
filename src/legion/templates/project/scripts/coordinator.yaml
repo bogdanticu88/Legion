@@ -1,0 +1,11 @@
+# The coordinator hands the notes job to notes-assistant, which runs under its own, narrower
+# grant and a slice of the coordinator's budget. `legion tasks <run-id>` shows the tree.
+- text: I'll hand this to the notes assistant.
+  tool_calls:
+    - name: delegate
+      arguments:
+        agent: notes-assistant
+        objective: Summarize the notes into out/summary.md
+        context: {audience: team}
+        budget: {tool_calls: 8}
+- text: Done. `legion tasks` shows what the notes assistant did.

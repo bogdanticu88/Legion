@@ -12,7 +12,7 @@ from legion.authority.ledger import Ledger
 from legion.domain.budget import BudgetLimits, Dimension
 from legion.domain.capability import Capability
 from legion.domain.errors import BudgetExceeded
-from legion.domain.grant import AttenuationError, Grant
+from legion.domain.grant import AttenuationError, DelegationLimits, Grant
 from legion.domain.principal import IdentityContext
 from legion.domain.states import is_terminal_run
 from legion.events.projections import RunState
@@ -35,7 +35,12 @@ IDENTITY = IdentityContext(principal=PRINCIPAL, agent_ref="a")
 
 def grant_of(capabilities: frozenset[Capability]) -> Grant:
     return Grant(
-        id="p", capabilities=capabilities, budget=BudgetLimits(), identity=IDENTITY, issuer="t"
+        id="p",
+        capabilities=capabilities,
+        budget=BudgetLimits(),
+        identity=IDENTITY,
+        issuer="t",
+        delegation=DelegationLimits(max_depth=1, max_children=1),
     )
 
 
@@ -49,7 +54,7 @@ def test_attenuation_never_widens(
 ) -> None:
     try:
         derived = grant_of(parent).attenuate(
-            id="c", capabilities=child, budget=BudgetLimits(), identity=IDENTITY, issuer="t"
+            id="c", capabilities=child, budget=BudgetLimits(), agent_ref="child"
         )
     except AttenuationError:
         return
