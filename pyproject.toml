@@ -26,6 +26,11 @@ dependencies = [
 [project.scripts]
 legion = "legion.cli:app"
 
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2.2,<3",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",

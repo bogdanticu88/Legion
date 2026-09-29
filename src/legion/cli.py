@@ -24,13 +24,16 @@ from legion.domain.states import RunStatus
 from legion.events.projections import TaskView
 from legion.events.types import Event, EventType
 from legion.kernel import operator
-from legion.kernel.runtime import RunOutcome, load_state
+from legion.kernel.runtime import Legion, RunOutcome, load_state
+from legion.tools.mcp import discover
 
 app = typer.Typer(help="Legion: run agents through one enforcement path.", no_args_is_help=True)
 agent_app = typer.Typer(help="Work with agent definitions.", no_args_is_help=True)
 approval_app = typer.Typer(help="Inspect approvals.", no_args_is_help=True)
+mcp_app = typer.Typer(help="Check MCP servers against their manifests.", no_args_is_help=True)
 app.add_typer(agent_app, name="agent")
 app.add_typer(approval_app, name="approval")
+app.add_typer(mcp_app, name="mcp")
 
 out = Console()
 err = Console(stderr=True)
@@ -114,7 +117,7 @@ def validate(
     loaded = _load(config)
     try:
         agent = load_agent(agent_file)
-        legion = loaded.build()
+        legion = _run(_build_and_close(loaded))
     except LegionError as exc:
         err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
@@ -128,6 +131,13 @@ def validate(
     out.print(
         f"[green]ok[/green] {agent.name} ({len(agent.tools)} tools, spec {agent.spec_hash[:12]})"
     )
+
+
+async def _build_and_close(loaded: Loaded) -> Legion:
+    try:
+        return await loaded.build()
+    finally:
+        await loaded.aclose()
 
 
 def _principal() -> Principal:
@@ -195,7 +205,7 @@ def run(
     async def go() -> RunOutcome:
         store = loaded.store()
         try:
-            legion = loaded.build(store)
+            legion = await loaded.build(store)
             agent = load_agent(agent_file)
             return await legion.run(agent, objective, principal=_principal())
         finally:
@@ -222,7 +232,7 @@ def resume(
     async def go() -> RunOutcome:
         store = loaded.store()
         try:
-            return await loaded.build(store).resume(run_id, principal=_principal())
+            return await (await loaded.build(store)).resume(run_id, principal=_principal())
         finally:
             await loaded.aclose()
             store.close()
@@ -233,6 +243,16 @@ def resume(
         err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
     _report(outcome, loaded, as_json)
+
+
+def _origin_rows(origin: Any) -> list[tuple[str, str]]:
+    if not isinstance(origin, dict):
+        return []
+    scope = origin.get("credential_scope") or "not declared"
+    return [
+        ("runs on", f"MCP server {origin.get('server')} as {origin.get('remote_tool')}"),
+        ("server credential", f"{scope} (Legion's grant doesn't narrow this)"),
+    ]
 
 
 def _show_approval(loaded: Loaded, approval_id: str) -> None:
@@ -256,6 +276,7 @@ def _show_approval(loaded: Loaded, approval_id: str) -> None:
         ("effect", str(s.get("effect"))),
         ("target", str(s.get("resource") or "(no resource)")),
         ("needs", ", ".join(s.get("required", [])) or "-"),
+        *_origin_rows(s.get("origin")),
         ("expires", approval.expires_at.isoformat(timespec="seconds")),
     ]
     if approval.decided_by:
@@ -471,6 +492,50 @@ def tasks(run_id: str, config: ConfigOption = Path("legion.yaml")) -> None:
     if state.root_task_id in state.tasks:
         walk(state.root_task_id, 0)
     out.print(table)
+
+
+@mcp_app.command("inspect")
+def mcp_inspect(server_id: str, config: ConfigOption = Path("legion.yaml")) -> None:
+    """Show what a server offers, how it matches the manifest, and the pins to review."""
+    loaded = _load(config)
+    if server_id not in loaded.config.mcp_servers:
+        err.print(f"[red]error:[/red] no MCP server {_safe(server_id)} in the configuration")
+        raise typer.Exit(2)
+    manifest = loaded.config.mcp_servers[server_id].tools
+
+    async def go() -> Any:
+        conn = loaded.connection(server_id)
+        try:
+            return conn, await discover(conn), await conn.remote_tools()
+        finally:
+            await loaded.aclose()
+
+    try:
+        conn, found, remote = _run(go())
+    except Exception as exc:
+        err.print(f"[red]error:[/red] can't reach {_safe(server_id)}: {_safe(type(exc).__name__)}")
+        raise typer.Exit(2) from exc
+    out.print(f"server {_safe(server_id)}  fingerprint {conn.fingerprint[:16]}")
+    out.print(f"says it is: {_safe(conn.server_info)} (not verified)")
+    table = Table("tool", "status", "pin to review", "claims (untrusted)")
+    for key, cfg in manifest.items():
+        status = (
+            "[green]ok[/green]"
+            if key not in found.blocked
+            else f"[red]{_safe(found.blocked[key])}[/red]"
+        )
+        definition = remote.get(cfg.remote or key)
+        claims = (
+            _safe(definition.annotations.model_dump(exclude_none=True))
+            if definition is not None and definition.annotations
+            else "-"
+        )
+        table.add_row(_safe(key), status, found.pins.get(key, "-"), claims)
+    for name in found.unlisted:
+        table.add_row(_safe(name), "[dim]not in manifest, never used[/dim]", "-", "-")
+    out.print(table)
+    if found.blocked:
+        raise typer.Exit(1)
 
 
 @app.command()

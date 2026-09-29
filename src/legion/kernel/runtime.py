@@ -148,6 +148,10 @@ class Legion:
         errors: list[str] = []
         warnings: list[str] = []
         unknown = [t for t in agent.tools if self.tools.get(t) is None]
+        for name in unknown:
+            if name in self.tools.blocked:
+                errors.append(f"tool {name} is unavailable: {self.tools.blocked[name]}")
+        unknown = [t for t in unknown if t not in self.tools.blocked]
         if unknown:
             errors.append(f"unknown tools: {', '.join(unknown)}")
         resolved = None

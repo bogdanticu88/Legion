@@ -25,6 +25,14 @@ from legion.models.base import ModelProvider
 from legion.models.openai_compat import OpenAICompatProvider
 from legion.models.resolver import ModelBinding, ModelResolver
 from legion.models.scripted import ScriptedProvider
+from legion.tools.mcp import (
+    Connection,
+    McpServerConfig,
+    check_servers,
+    discover,
+    local_name,
+    opener_for,
+)
 from legion.tools.registry import ToolRegistry, load_tool_module
 
 
@@ -98,6 +106,7 @@ class LegionConfig(_Strict):
     credentials: dict[str, str] = Field(default_factory=dict)
     retry: RetryConfig = RetryConfig()
     approvals: ApprovalConfig = ApprovalConfig()
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
 
 
 @dataclass
@@ -106,6 +115,7 @@ class Loaded:
     config: LegionConfig
     config_hash: str
     providers: dict[str, ModelProvider] = field(default_factory=dict)
+    connections: list[Connection] = field(default_factory=list)
 
     @property
     def root(self) -> Path:
@@ -134,7 +144,7 @@ class Loaded:
                     f"{state_dir}; keep the store outside anything tools can write"
                 )
 
-    def build(self, store: SqliteEventStore | None = None) -> Legion:
+    async def build(self, store: SqliteEventStore | None = None) -> Legion:
         self.check_state_dir()
         env = EnvResolver()
         self.providers = {name: self._provider(p, env) for name, p in self.config.providers.items()}
@@ -142,6 +152,8 @@ class Loaded:
         for module in self.config.tool_modules:
             for tool in load_tool_module(self.resolve_path(module)):
                 tools.register(tool)
+        for server_id, server in self.config.mcp_servers.items():
+            await self._register_mcp(server_id, server, env, tools)
         return Legion(
             resolver=ModelResolver(self.config.models, self.providers),
             tools=tools,
@@ -175,9 +187,40 @@ class Loaded:
             catalog[spec.name] = spec
         return catalog
 
+    def connection(self, server_id: str, env: EnvResolver | None = None) -> Connection:
+        server = self.config.mcp_servers[server_id]
+        logs = self.resolve_path(self.config.store).parent / "mcp"
+        logs.mkdir(parents=True, exist_ok=True)
+        opener = opener_for(server, env or EnvResolver(), errlog=logs / f"{server_id}.stderr.log")
+        conn = Connection(server_id, server, opener)
+        self.connections.append(conn)
+        return conn
+
+    async def _register_mcp(
+        self, server_id: str, server: McpServerConfig, env: EnvResolver, tools: ToolRegistry
+    ) -> None:
+        # A server that can't be reached, or whose tools don't match their pins, just doesn't
+        # contribute tools; an agent that needs them then refuses to start and says why.
+        conn = self.connection(server_id, env)
+        try:
+            found = await discover(conn)
+        except Exception as exc:
+            for key in server.tools:
+                tools.blocked[local_name(server_id, key)] = (
+                    f"MCP server {server_id} unreachable ({type(exc).__name__})"
+                )
+            await conn.reset()
+            return
+        for tool in found.tools:
+            tools.register(tool)
+        for key, reason in found.blocked.items():
+            tools.blocked[local_name(server_id, key)] = reason
+
     async def aclose(self) -> None:
         for provider in self.providers.values():
             await provider.aclose()
+        for conn in self.connections:
+            await conn.aclose()
 
     def _provider(self, cfg: ProviderConfig, env: EnvResolver) -> ModelProvider:
         access: AccessProvider = NoAuth()
@@ -229,6 +272,7 @@ def load_config(path: Path) -> Loaded:
             Capability.parse(cap)
         except ValueError as exc:
             raise ConfigError(f"{path}: invalid grantable capability {cap!r}") from exc
+    check_servers(config.mcp_servers)
     return Loaded(path=path.resolve(), config=config, config_hash=digest(raw))
 
 

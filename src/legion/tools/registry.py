@@ -12,6 +12,8 @@ from legion.tools.base import Tool
 class ToolRegistry:
     def __init__(self, tools: Iterable[Tool] = ()) -> None:
         self._tools: dict[str, Tool] = {}
+        # tools that were configured but couldn't be registered, and why
+        self.blocked: dict[str, str] = {}
         for t in tools:
             self.register(t)
 
