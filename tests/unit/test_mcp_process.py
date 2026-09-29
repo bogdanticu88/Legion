@@ -125,6 +125,36 @@ def test_server_stderr_goes_to_a_file_not_the_terminal(tmp_path: Path) -> None:
     assert "approved" in logged
 
 
+def test_relative_cwd_is_relative_to_the_config(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    write_project(project)
+    config = yaml.safe_load((project / "legion.yaml").read_text())
+    config["mcp_servers"]["issues"]["cwd"] = "."
+    (project / "legion.yaml").write_text(yaml.safe_dump(config))
+    # run from somewhere else; server.py has to be found next to legion.yaml
+    result = cli(tmp_path, "mcp", "inspect", "issues", "-c", "proj/legion.yaml")
+    assert "doesn't match its pin" in result.stdout, result.stdout + result.stderr
+    log = project / ".legion" / "mcp" / "issues.stderr.log"
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+
+
+def test_unversioned_package_is_flagged(tmp_path: Path) -> None:
+    write_project(tmp_path)
+    # a stand-in npx, so the test never fetches anything from a registry
+    runner = tmp_path / "bin" / "npx"
+    runner.parent.mkdir()
+    runner.write_text("#!/bin/sh\nexit 1\n")
+    runner.chmod(0o755)
+    config = yaml.safe_load((tmp_path / "legion.yaml").read_text())
+    config["mcp_servers"]["issues"]["command"] = [str(runner), "-y", "some-mcp-server"]
+    (tmp_path / "legion.yaml").write_text(yaml.safe_dump(config))
+    result = cli(tmp_path, "mcp", "inspect", "issues")
+    # warned before trying to start it, even though starting it fails
+    assert "some-mcp-server has no version" in result.stdout
+    assert result.returncode == 2
+
+
 def test_unpinned_tool_stops_the_agent_from_starting(tmp_path: Path) -> None:
     write_project(tmp_path)
     result = cli(tmp_path, "run", "agents/filer.yaml", "file it")

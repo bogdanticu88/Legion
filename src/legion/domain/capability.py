@@ -28,7 +28,11 @@ class Capability(BaseModel):
 
     @classmethod
     def parse(cls, text: str) -> Capability:
+        """For capabilities someone asks for or grants. A call's resource is built directly."""
         name, sep, resource = text.partition(":")
+        if sep and ".." in resource.split("/"):
+            # a pattern with .. never matches, and it confuses the checks that compare patterns
+            raise ValueError("capability resource can't contain '..'")
         return cls(name=name, resource=resource if sep else None)
 
     def __str__(self) -> str:

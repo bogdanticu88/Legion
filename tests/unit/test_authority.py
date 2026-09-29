@@ -65,7 +65,13 @@ class TestCapability:
         ],
     )
     def test_covers(self, granted: str, required: str, covered: bool) -> None:
-        assert C(granted).covers(C(required)) is covered
+        # built the way the pipeline builds a call's requirement, not parsed
+        name, _, resource = required.partition(":")
+        assert C(granted).covers(Capability(name=name, resource=resource or None)) is covered
+
+    def test_granted_patterns_cannot_contain_dotdot(self) -> None:
+        with pytest.raises(ValueError, match=r"\.\."):
+            C("files.read:notes/../secret/**")
 
     def test_is_within(self) -> None:
         parent = frozenset({C("files.read:notes/**"), C("net.*")})

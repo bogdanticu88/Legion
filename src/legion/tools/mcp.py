@@ -16,10 +16,10 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from legion.access.base import check_endpoint
 from legion.access.secrets import CredentialResolver, SecretRef
 from legion.canonical import digest
 from legion.domain.action import EffectClass
@@ -29,7 +29,6 @@ from legion.tools.base import TOOL_NAME, ToolContext, ToolResult, ToolSpec, reso
 _SERVER_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 _UNSAFE_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 DESCRIPTION_LIMIT = 1_000
-_LOOPBACK = ("localhost", "127.0.0.1", "::1")
 
 
 class McpToolConfig(BaseModel):
@@ -79,15 +78,23 @@ class McpServerConfig(BaseModel):
     def check(self, server_id: str) -> None:
         if not _SERVER_ID.match(server_id):
             raise ConfigError(f"MCP server id must match {_SERVER_ID.pattern}: {server_id!r}")
-        if self.transport == "stdio" and not self.command:
-            raise ConfigError(f"MCP server {server_id} uses stdio but has no command")
+        if self.transport == "stdio":
+            if not self.command or not self.command[0]:
+                raise ConfigError(f"MCP server {server_id} uses stdio but has no command")
+            if self.url or self.headers:
+                raise ConfigError(f"MCP server {server_id} uses stdio; url and headers don't apply")
         if self.transport == "http":
             if not self.url:
                 raise ConfigError(f"MCP server {server_id} uses http but has no url")
-            parts = urlsplit(self.url)
-            # headers carry credentials; plain http is only for a server on this machine
-            if parts.scheme != "https" and parts.hostname not in _LOOPBACK:
-                raise ConfigError(f"MCP server {server_id} needs an https url")
+            if self.command or self.cwd or self.env:
+                raise ConfigError(
+                    f"MCP server {server_id} uses http; command, cwd and env don't apply"
+                )
+            # Always treated as carrying credentials: plain http only to this machine.
+            try:
+                check_endpoint(self.url, carries_credentials=True)
+            except ValueError as exc:
+                raise ConfigError(f"MCP server {server_id}: {exc}") from exc
         for key, tool in self.tools.items():
             if not TOOL_NAME.match(local_name(server_id, key)):
                 raise ConfigError(f"MCP tool key {key!r} on {server_id} isn't a usable name")
@@ -98,6 +105,24 @@ class McpServerConfig(BaseModel):
                     f"MCP tool {key} on {server_id}: timeout_s must be longer than the "
                     f"server's discovery_timeout_s ({self.discovery_timeout_s})"
                 )
+
+
+_RUNNERS = ("npx", "bunx", "pnpx", "uvx", "pipx")
+
+
+def unpinned_package(config: McpServerConfig) -> str | None:
+    """The package a runner like npx will fetch at its latest version, if it looks unversioned."""
+    if config.transport != "stdio" or not config.command:
+        return None
+    if Path(config.command[0]).name not in _RUNNERS:
+        return None
+    args = [a for a in config.command[1:] if not a.startswith("-") and a != "run"]
+    if not args:
+        return None
+    package = args[0]
+    # npm style name@1.2.3 (a leading @ is a scope), or python style name==1.2.3
+    versioned = "@" in package.lstrip("@") or "==" in package
+    return None if versioned else package
 
 
 def local_name(server_id: str, key: str) -> str:
@@ -210,8 +235,17 @@ class Connection:
 
 
 def opener_for(
-    config: McpServerConfig, resolver: CredentialResolver, errlog: Path | None = None
+    config: McpServerConfig,
+    resolver: CredentialResolver,
+    errlog: Path | None = None,
+    base: Path | None = None,
 ) -> Callable[[], AbstractAsyncContextManager[Any]]:
+    # `base` is the config directory: a relative cwd means relative to legion.yaml, like every
+    # other path there. The pin uses cwd as written, so it doesn't depend on where that is.
+    cwd = config.cwd
+    if base is not None:
+        cwd = str(base / cwd) if cwd is not None else str(base)
+
     import httpx2
     from mcp import Client, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -227,11 +261,13 @@ def opener_for(
             command=config.command[0],
             args=list(config.command[1:]),
             env=env or None,
-            cwd=config.cwd,
+            cwd=cwd,
         )
         # A server's stderr would otherwise land in the operator's terminal, where it could pass
         # for Legion's own output. It goes to a file instead.
-        with (errlog or Path(os.devnull)).open("a") as log:
+        # The server's stderr isn't scrubbed and may hold its own token, so only this user reads it.
+        target = errlog or Path(os.devnull)
+        with open(os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a") as log:
             # no response cache: every listing has to come from the server as it is now
             async with Client(stdio_client(params, errlog=log), cache=None) as client:
                 yield client
@@ -444,6 +480,7 @@ def _clean(text: str) -> str:
 
 def check_servers(servers: Mapping[str, McpServerConfig]) -> None:
     if servers and importlib.util.find_spec("mcp") is None:
-        raise ConfigError("mcp_servers needs the MCP SDK: install legion with the mcp extra")
+        # not "pip install legion[mcp]": the legion package on PyPI is someone else's project
+        raise ConfigError("mcp_servers needs the MCP SDK: run `uv sync --extra mcp`")
     for server_id, config in servers.items():
         config.check(server_id)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from legion.access.secrets import CredentialResolver, SecretRef
 
@@ -29,6 +30,21 @@ class NoAuth:
 
     def describe(self) -> dict[str, str]:
         return {"kind": self.kind}
+
+
+_LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def check_endpoint(url: str, *, carries_credentials: bool) -> None:
+    """Raise ValueError for a URL Legion shouldn't send requests (or credentials) to."""
+    # The URL isn't repeated in errors: it may have a password or token in it.
+    parts = urlsplit(url)
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        raise ValueError("URLs can't carry a username or password; use a secret reference")
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        raise ValueError("the URL has to be http or https, with a host")
+    if carries_credentials and parts.scheme.lower() != "https" and parts.hostname not in _LOOPBACK:
+        raise ValueError(f"{parts.hostname} gets credentials, so it needs https")
 
 
 class ApiKeyAccess:

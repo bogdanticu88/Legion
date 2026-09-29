@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from legion.access.base import AccessProvider, ApiKeyAccess, NoAuth
+from legion.access.base import AccessProvider, ApiKeyAccess, NoAuth, check_endpoint
 from legion.access.secrets import EnvResolver, SecretRef
 from legion.artifacts import FileArtifactStore
 from legion.authority.policy import Rule, RuleTablePolicy, Verdict, default_rules
@@ -28,6 +29,7 @@ from legion.models.scripted import ScriptedProvider
 from legion.tools.mcp import (
     Connection,
     McpServerConfig,
+    capability,
     check_servers,
     discover,
     local_name,
@@ -37,7 +39,7 @@ from legion.tools.registry import ToolRegistry, load_tool_module
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
 
 class AccessConfig(_Strict):
@@ -46,9 +48,11 @@ class AccessConfig(_Strict):
 
     @model_validator(mode="after")
     def _secret(self) -> AccessConfig:
-        if self.kind == "api_key":
-            if self.secret is None:
-                raise ValueError("api_key access needs `secret: env:NAME`")
+        if self.kind == "api_key" and self.secret is None:
+            raise ValueError("api_key access needs `secret: env:NAME`")
+        if self.kind == "none" and self.secret is not None:
+            raise ValueError("`secret` is set but access kind is none")
+        if self.secret is not None:
             SecretRef.parse(self.secret)
         return self
 
@@ -58,7 +62,7 @@ class ProviderConfig(_Strict):
     base_url: str | None = None
     access: AccessConfig = AccessConfig()
     script: str | None = None
-    timeout_s: float = Field(default=120.0, gt=0)
+    timeout_s: float = Field(default=120.0, gt=0, le=3600)
     output_limit_field: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
 
     @model_validator(mode="after")
@@ -67,6 +71,8 @@ class ProviderConfig(_Strict):
             raise ValueError("scripted provider needs `script`")
         if self.kind == "openai_compat" and not self.base_url:
             raise ValueError("openai_compat provider needs `base_url`")
+        if self.base_url is not None:
+            check_endpoint(self.base_url, carries_credentials=self.access.kind != "none")
         return self
 
 
@@ -83,8 +89,8 @@ class PolicyConfig(_Strict):
 
 class RetryConfig(_Strict):
     max_attempts: int = Field(default=3, ge=1, le=10)
-    base_delay: float = Field(default=1.0, ge=0)
-    max_delay: float = Field(default=30.0, ge=0)
+    base_delay: float = Field(default=1.0, ge=0, le=3600)
+    max_delay: float = Field(default=30.0, ge=0, le=3600)
 
 
 class ApprovalConfig(_Strict):
@@ -107,6 +113,20 @@ class LegionConfig(_Strict):
     retry: RetryConfig = RetryConfig()
     approvals: ApprovalConfig = ApprovalConfig()
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+
+    @field_validator("store", "artifacts")
+    @classmethod
+    def _path(cls, value: str) -> str:
+        if not value.strip() or "\x00" in value:
+            raise ValueError("must be a usable path")
+        return value
+
+    @field_validator("credentials")
+    @classmethod
+    def _refs(cls, value: dict[str, str]) -> dict[str, str]:
+        for ref in value.values():
+            SecretRef.parse(ref)
+        return value
 
 
 @dataclass
@@ -132,17 +152,25 @@ class Loaded:
         return FileRunLocks(self.resolve_path(self.config.store).parent / "locks")
 
     def check_state_dir(self) -> None:
-        # The event log holds approvals. If a tool can write to it, an agent could append an
-        # approval for itself, so refuse configurations where a tool setting points at a
-        # directory that contains the state directory. It can't see paths tools pick themselves.
-        state_dir = self.resolve_path(self.config.store).parent.resolve()
+        # The event log holds approvals, and the config and tool modules decide what runs. If a
+        # tool setting points at a directory containing any of them, an agent could approve its
+        # own actions or change its own code, so refuse. Paths that don't exist yet count too;
+        # the first run would create them. It can't see paths tools pick themselves.
+        protected = {
+            "the state directory": self.resolve_path(self.config.store).parent,
+            "legion.yaml": self.path,
+            **{f"tool module {m}": self.resolve_path(m) for m in self.config.tool_modules},
+        }
+        if self.config.agents_dir is not None:
+            protected["the agents directory"] = self.resolve_path(self.config.agents_dir)
         for key, value in self.config.tool_settings.items():
             candidate = self.resolve_path(value).resolve()
-            if candidate.is_dir() and state_dir.is_relative_to(candidate):
-                raise ConfigError(
-                    f"tool setting {key}={value!r} gives tools access to the state directory "
-                    f"{state_dir}; keep the store outside anything tools can write"
-                )
+            for what, path in protected.items():
+                if path.resolve().is_relative_to(candidate):
+                    raise ConfigError(
+                        f"tool setting {key}={value!r} lets tools write {what}; point it "
+                        f"somewhere that holds only what the tools should touch"
+                    )
 
     async def build(self, store: SqliteEventStore | None = None) -> Legion:
         self.check_state_dir()
@@ -154,7 +182,7 @@ class Loaded:
                 tools.register(tool)
         for server_id, server in self.config.mcp_servers.items():
             await self._register_mcp(server_id, server, env, tools)
-        return Legion(
+        legion = Legion(
             resolver=ModelResolver(self.config.models, self.providers),
             tools=tools,
             store=store or self.store(),
@@ -177,6 +205,26 @@ class Loaded:
             max_delegation_depth=self.config.authority.max_delegation_depth,
             max_tasks=self.config.authority.max_tasks,
         )
+        self._check_rules(legion.tools)
+        return legion
+
+    def _check_rules(self, tools: ToolRegistry) -> None:
+        # A rule that matches no tool or capability reads like a control and does nothing, e.g.
+        # `tool: publish-summary` when the tool is publish_summary. Refuse it.
+        names = [*tools.names(), *tools.blocked]
+        caps = {c for n in tools.names() if (t := tools.get(n)) for c in t.spec.capabilities}
+        for server_id, server in self.config.mcp_servers.items():
+            for key, cfg in server.tools.items():
+                caps.update((capability(server_id, key), *cfg.capabilities))
+        for i, rule in enumerate(self.config.policy.rules):
+            if rule.tool is not None and not any(fnmatchcase(n, rule.tool) for n in names):
+                raise ConfigError(f"policy rule {i + 1}: no tool matches {rule.tool!r}")
+            if rule.capability is not None and not any(
+                fnmatchcase(c, rule.capability) for c in caps
+            ):
+                raise ConfigError(
+                    f"policy rule {i + 1}: no tool needs a capability matching {rule.capability!r}"
+                )
 
     def agents(self) -> dict[str, AgentSpec]:
         if self.config.agents_dir is None:
@@ -196,7 +244,9 @@ class Loaded:
         server = self.config.mcp_servers[server_id]
         logs = self.resolve_path(self.config.store).parent / "mcp"
         logs.mkdir(parents=True, exist_ok=True)
-        opener = opener_for(server, env or EnvResolver(), errlog=logs / f"{server_id}.stderr.log")
+        opener = opener_for(
+            server, env or EnvResolver(), errlog=logs / f"{server_id}.stderr.log", base=self.root
+        )
         conn = Connection(server_id, server, opener)
         self.connections.append(conn)
         return conn
@@ -249,13 +299,47 @@ class Loaded:
         )
 
 
+class _StrictLoader(yaml.SafeLoader):
+    # A repeated key would quietly replace the first one, so a file could read one way and load
+    # another (`decision: require_approval` followed by `decision: allow`). Aliases are refused
+    # too: config doesn't need them, and a few nested ones expand into gigabytes.
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        if self.check_event(yaml.AliasEvent):
+            mark = self.peek_event().start_mark  # type: ignore[no-untyped-call]
+            raise yaml.composer.ComposerError(None, None, "aliases aren't allowed", mark)
+        return super().compose_node(parent, index)
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        seen: set[Any] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in seen
+            except TypeError:
+                continue  # unhashable key; the base class reports it
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"duplicate key {key!r}", key_node.start_mark
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
 def _read_yaml(path: Path) -> Any:
     try:
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)  # noqa: S506
     except OSError as exc:
         raise ConfigError(f"cannot read {path}: {exc.strerror}") from exc
     except yaml.YAMLError as exc:
-        raise ConfigError(f"{path} is not valid YAML: {exc}") from exc
+        # PyYAML's own message quotes the offending line, which may hold a pasted secret
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1}" if mark is not None else ""
+        problem = getattr(exc, "problem", None) or "syntax error"
+        raise ConfigError(f"{path} is not valid YAML{where}: {problem}") from exc
+    except ValueError as exc:
+        # e.g. an integer with thousands of digits
+        raise ConfigError(f"{path} has a value that can't be read: {exc}") from exc
 
 
 def _explain(path: Path, exc: ValidationError) -> ConfigError:
@@ -278,7 +362,12 @@ def load_config(path: Path) -> Loaded:
         except ValueError as exc:
             raise ConfigError(f"{path}: invalid grantable capability {cap!r}") from exc
     check_servers(config.mcp_servers)
-    return Loaded(path=path.resolve(), config=config, config_hash=digest(raw))
+    try:
+        config_hash = digest(raw)
+    except ValueError as exc:
+        # infinity or NaN somewhere pydantic doesn't look, like model options
+        raise ConfigError(f"{path} has a value that can't be recorded: {exc}") from exc
+    return Loaded(path=path.resolve(), config=config, config_hash=config_hash)
 
 
 def load_agent(path: Path) -> AgentSpec:

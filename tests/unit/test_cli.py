@@ -112,7 +112,7 @@ def test_run_refuses_invalid_agent(project: Path) -> None:
 
 
 def test_config_accepts_approval_settings(tmp_path: Path) -> None:
-    text = (TEMPLATE / "legion.yaml").read_text() + "\napprovals:\n  ttl_seconds: 600\n"
+    text = (TEMPLATE / "legion.yaml").read_text().replace("ttl_seconds: 3600", "ttl_seconds: 600")
     (tmp_path / "legion.yaml").write_text(text)
     assert load_config(tmp_path / "legion.yaml").config.approvals.ttl_seconds == 600
 
@@ -120,6 +120,23 @@ def test_config_accepts_approval_settings(tmp_path: Path) -> None:
 def test_config_rejects_unknown_fields(tmp_path: Path) -> None:
     (tmp_path / "legion.yaml").write_text("version: 1\nproviders: {}\nmodels: []\nsurprise: 1\n")
     with pytest.raises(ConfigError, match="surprise"):
+        load_config(tmp_path / "legion.yaml")
+
+
+def test_mcp_servers_without_the_sdk_fail_clearly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib.util
+
+    real = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *a: None if name == "mcp" else real(name, *a)
+    )
+    (tmp_path / "legion.yaml").write_text(
+        "version: 1\nproviders: {}\nmodels: []\n"
+        "mcp_servers:\n  x:\n    transport: stdio\n    command: [x]\n"
+    )
+    with pytest.raises(ConfigError, match="uv sync --extra mcp"):
         load_config(tmp_path / "legion.yaml")
 
 

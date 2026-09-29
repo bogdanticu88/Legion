@@ -25,7 +25,7 @@ from legion.events.projections import TaskView
 from legion.events.types import Event, EventType
 from legion.kernel import operator
 from legion.kernel.runtime import Legion, RunOutcome, load_state
-from legion.tools.mcp import discover
+from legion.tools.mcp import discover, unpinned_package
 
 app = typer.Typer(help="Legion: run agents through one enforcement path.", no_args_is_help=True)
 agent_app = typer.Typer(help="Work with agent definitions.", no_args_is_help=True)
@@ -502,6 +502,12 @@ def mcp_inspect(server_id: str, config: ConfigOption = Path("legion.yaml")) -> N
         err.print(f"[red]error:[/red] no MCP server {_safe(server_id)} in the configuration")
         raise typer.Exit(2)
     manifest = loaded.config.mcp_servers[server_id].tools
+    package = unpinned_package(loaded.config.mcp_servers[server_id])
+    if package is not None:
+        out.print(
+            f"[yellow]warning:[/yellow] {_safe(package)} has no version, so the code can change "
+            "without any pin changing"
+        )
 
     async def go() -> Any:
         conn = loaded.connection(server_id)
