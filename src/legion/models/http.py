@@ -53,6 +53,14 @@ def _reject_constant(name: str) -> Any:
     raise MalformedModelResponse(f"response contains {name}, which is not valid JSON")
 
 
+def token_count(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise MalformedModelResponse(f"bad token count in usage: {value!r}"[:120])
+    return value
+
+
 def _error_for(response: httpx.Response) -> Exception:
     status = response.status_code
     detail = _detail(response)

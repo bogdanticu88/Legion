@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,6 +17,7 @@ from legion.domain.agent import AgentSpec
 from legion.domain.capability import Capability
 from legion.domain.errors import ConfigError
 from legion.events.sqlite_store import SqliteEventStore
+from legion.kernel.locks import FileRunLocks
 from legion.kernel.runtime import Legion
 from legion.kernel.services import RetryPolicy
 from legion.models.anthropic import AnthropicProvider
@@ -75,6 +77,10 @@ class RetryConfig(_Strict):
     max_delay: float = Field(default=30.0, ge=0)
 
 
+class ApprovalConfig(_Strict):
+    ttl_seconds: int = Field(default=3600, gt=0, le=7 * 24 * 3600)
+
+
 class LegionConfig(_Strict):
     version: Literal[1]
     store: str = ".legion/legion.db"
@@ -87,6 +93,7 @@ class LegionConfig(_Strict):
     policy: PolicyConfig = PolicyConfig()
     credentials: dict[str, str] = Field(default_factory=dict)
     retry: RetryConfig = RetryConfig()
+    approvals: ApprovalConfig = ApprovalConfig()
 
 
 @dataclass
@@ -107,6 +114,9 @@ class Loaded:
     def store(self) -> SqliteEventStore:
         return SqliteEventStore(self.resolve_path(self.config.store))
 
+    def locks(self) -> FileRunLocks:
+        return FileRunLocks(self.resolve_path(self.config.store).parent / "locks")
+
     def build(self, store: SqliteEventStore | None = None) -> Legion:
         env = EnvResolver()
         self.providers = {name: self._provider(p, env) for name, p in self.config.providers.items()}
@@ -126,6 +136,8 @@ class Loaded:
             settings={**self.config.tool_settings, "config_dir": str(self.root)},
             retry=RetryPolicy(**self.config.retry.model_dump()),
             config_hash=self.config_hash,
+            locks=self.locks(),
+            approval_ttl=timedelta(seconds=self.config.approvals.ttl_seconds),
         )
 
     async def aclose(self) -> None:
@@ -182,8 +194,6 @@ def load_config(path: Path) -> Loaded:
             Capability.parse(cap)
         except ValueError as exc:
             raise ConfigError(f"{path}: invalid grantable capability {cap!r}") from exc
-    # build it once here so bad rules fail at load time
-    RuleTablePolicy(config.policy.rules, config.policy.default)
     return Loaded(path=path.resolve(), config=config, config_hash=digest(raw))
 
 

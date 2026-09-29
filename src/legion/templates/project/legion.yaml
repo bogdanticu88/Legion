@@ -14,6 +14,9 @@ providers:
   script:
     kind: scripted
     script: scripts/assistant.yaml
+  publish-script:
+    kind: scripted
+    script: scripts/publisher.yaml
   # any OpenAI-compatible server (Ollama here, vLLM/llama.cpp work too)
   local:
     kind: openai_compat
@@ -27,6 +30,9 @@ providers:
 models:
   - profile: general/default
     provider: script
+    model: scripted
+  - profile: demo/publisher
+    provider: publish-script
     model: scripted
   # for a real model, rename one of these to general/default (first match wins)
   - profile: general/local
@@ -44,12 +50,16 @@ authority:
   grantable:
     - files.read:notes/**
     - files.write:out/**
+    - notes.publish:team
 
 policy:
   default: allow
   rules:
-    - decision: deny
+    - decision: require_approval
       effect: external_irreversible
-      reason: irreversible actions need human approval, which is not available yet
+      reason: irreversible actions need a human to approve them
+
+approvals:
+  ttl_seconds: 3600
 
 credentials: {}

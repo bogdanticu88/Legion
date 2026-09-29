@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
@@ -18,7 +19,7 @@ from legion.domain.principal import Principal, PrincipalKind
 from legion.events.store import EventStore, MemoryEventStore
 from legion.events.types import Event, EventType
 from legion.kernel.runtime import Legion
-from legion.kernel.services import RetryPolicy
+from legion.kernel.services import RetryPolicy, no_faults
 from legion.models.resolver import ModelBinding, ModelResolver, Pricing
 from legion.models.scripted import ScriptedProvider, Step
 from legion.ports.identity import IdentityPort
@@ -27,6 +28,24 @@ from legion.tools.native import tool
 from legion.tools.registry import ToolRegistry
 
 PRINCIPAL = Principal(kind=PrincipalKind.HUMAN, id="tester")
+OPERATOR = Principal(kind=PrincipalKind.HUMAN, id="operator")
+
+
+class SimulatedCrash(BaseException):
+    # BaseException so nothing in Legion catches it: the run just stops, like kill -9.
+    pass
+
+
+def crash_at(point: str, nth: int = 1) -> Any:
+    hits = {"n": 0}
+
+    def fault(name: str) -> None:
+        if name == point:
+            hits["n"] += 1
+            if hits["n"] == nth:
+                raise SimulatedCrash(point)
+
+    return fault
 
 
 class PathArgs(BaseModel):
@@ -91,6 +110,15 @@ class Harness:
     files: Files
     sleeps: Sleeps
     artifacts: MemoryArtifactStore
+    rebuild: Any = None
+
+    def restart(self, **changes: Any) -> Harness:
+        """A new Legion on the same store and files, as if the process had been restarted."""
+        fresh: Harness = self.rebuild(**changes)
+        return fresh
+
+    async def resume(self, run_id: str) -> Any:
+        return await self.legion.resume(run_id, principal=OPERATOR)
 
     async def run(self, spec: AgentSpec | None = None, objective: str = "do it", **kw: Any) -> Any:
         return await self.legion.run(spec or agent(), objective, principal=PRINCIPAL, **kw)
@@ -119,9 +147,15 @@ def build(
     credential_bindings: dict[str, SecretRef] | None = None,
     files: Files | None = None,
     retry: RetryPolicy | None = None,
+    faults: Any = None,
+    now: Any = None,
+    settings: dict[str, str] | None = None,
+    by_turn: bool = False,
+    approval_ttl: timedelta = timedelta(hours=1),
 ) -> Harness:
+    args = dict(locals())
     files = files or Files({"docs/a.md": "alpha", "secret/b.md": "beta"})
-    provider = ScriptedProvider(steps)
+    provider = ScriptedProvider(steps, by_turn=by_turn)
     registry = ToolRegistry([*file_tools(files), *extra_tools])
     sleeps = Sleeps()
     artifacts = MemoryArtifactStore()
@@ -145,5 +179,14 @@ def build(
         artifacts=artifacts,
         retry=retry or RetryPolicy(max_attempts=3, base_delay=1.0, max_delay=8.0),
         sleep=sleeps,
+        faults=faults or no_faults,
+        now=now or (lambda: datetime.now(UTC)),
+        settings=settings,
+        approval_ttl=approval_ttl,
     )
-    return Harness(legion, provider, store, files, sleeps, artifacts)
+
+    def rebuild(**changes: Any) -> Harness:
+        kept = {**args, "store": store, "files": files, "faults": None, "by_turn": True}
+        return build(**{**kept, **changes})
+
+    return Harness(legion, provider, store, files, sleeps, artifacts, rebuild)

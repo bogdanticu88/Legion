@@ -111,15 +111,10 @@ def test_run_refuses_invalid_agent(project: Path) -> None:
     assert "invalid" in out
 
 
-def test_config_rejects_approval_rules(tmp_path: Path) -> None:
-    text = (
-        (TEMPLATE / "legion.yaml")
-        .read_text()
-        .replace("decision: deny", "decision: require_approval")
-    )
+def test_config_accepts_approval_settings(tmp_path: Path) -> None:
+    text = (TEMPLATE / "legion.yaml").read_text() + "\napprovals:\n  ttl_seconds: 600\n"
     (tmp_path / "legion.yaml").write_text(text)
-    with pytest.raises(ConfigError, match="phase 2"):
-        load_config(tmp_path / "legion.yaml")
+    assert load_config(tmp_path / "legion.yaml").config.approvals.ttl_seconds == 600
 
 
 def test_config_rejects_unknown_fields(tmp_path: Path) -> None:

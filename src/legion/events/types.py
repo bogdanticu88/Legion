@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,11 +21,16 @@ class EventType(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     RUN_CANCELLED = "run.cancelled"
+    RUN_PAUSED = "run.paused"
+    RUN_RESUMED = "run.resumed"
     TASK_CREATED = "task.created"
     TASK_STARTED = "task.started"
     TASK_COMPLETED = "task.completed"
     TASK_FAILED = "task.failed"
     TASK_CANCELLED = "task.cancelled"
+    TASK_AWAITING_APPROVAL = "task.awaiting_approval"
+    TASK_BLOCKED = "task.blocked"
+    TASK_RESUMED = "task.resumed"
     MODEL_REQUESTED = "model.requested"
     MODEL_RESPONDED = "model.responded"
     MODEL_FAILED = "model.failed"
@@ -34,6 +39,14 @@ class EventType(StrEnum):
     ACTION_AUTHORIZED = "action.authorized"
     ACTION_REPEATED = "action.repeated"
     ACTION_IN_DOUBT = "action.in_doubt"
+    ACTION_INTERRUPTED = "action.interrupted"
+    ACTION_RECONCILED = "action.reconciled"
+    APPROVAL_REQUESTED = "approval.requested"
+    APPROVAL_GRANTED = "approval.granted"
+    APPROVAL_DENIED = "approval.denied"
+    APPROVAL_EXPIRED = "approval.expired"
+    APPROVAL_CONSUMED = "approval.consumed"
+    APPROVAL_INVALIDATED = "approval.invalidated"
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
     TOOL_FAILED = "tool.failed"
@@ -99,10 +112,11 @@ class ModelRequested(_Payload):
 
 
 class Usage(_Payload):
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
+    # negative counts would let a provider lower the recorded spend
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
 
     @property
     def total(self) -> int:
@@ -212,6 +226,71 @@ class BudgetExceeded(_Payload):
     attempted: Decimal
 
 
+class Paused(_Payload):
+    reason: Literal["approval", "reconciliation"]
+    approval_id: str | None = None
+    call_id: str | None = None
+
+
+class Resumed(_Payload):
+    by: str
+    previous_status: str
+    config_hash: str
+
+
+class AwaitingApproval(_Payload):
+    approval_id: str
+
+
+class Blocked(_Payload):
+    call_id: str
+    reason: str
+
+
+class ActionInterrupted(_Payload):
+    call_id: str
+    action_hash: str
+    effect: str
+
+
+class ActionReconciled(_Payload):
+    call_id: str
+    action_hash: str
+    outcome: Literal["applied", "not_applied"]
+    by: str
+    note: str = ""
+
+
+class ApprovalRequested(_Payload):
+    approval_id: str
+    call_id: str
+    action_hash: str
+    binding_hash: str
+    # what the human is shown; the binding hash is what gets enforced
+    subject: dict[str, Any]
+    expires_at: datetime
+
+
+class ApprovalDecided(_Payload):
+    approval_id: str
+    by: str
+    note: str = ""
+
+
+class ApprovalRef(_Payload):
+    approval_id: str
+
+
+class ApprovalConsumed(_Payload):
+    approval_id: str
+    call_id: str
+
+
+class ApprovalInvalidated(_Payload):
+    approval_id: str
+    reason: str
+
+
 class OutputRejected(_Payload):
     attempt: int
     reason: str
@@ -242,6 +321,19 @@ PAYLOADS: dict[EventType, type[_Payload]] = {
     EventType.BUDGET_CONSUMED: BudgetConsumed,
     EventType.BUDGET_EXCEEDED: BudgetExceeded,
     EventType.OUTPUT_REJECTED: OutputRejected,
+    EventType.RUN_PAUSED: Paused,
+    EventType.RUN_RESUMED: Resumed,
+    EventType.TASK_AWAITING_APPROVAL: AwaitingApproval,
+    EventType.TASK_BLOCKED: Blocked,
+    EventType.TASK_RESUMED: Empty,
+    EventType.ACTION_INTERRUPTED: ActionInterrupted,
+    EventType.ACTION_RECONCILED: ActionReconciled,
+    EventType.APPROVAL_REQUESTED: ApprovalRequested,
+    EventType.APPROVAL_GRANTED: ApprovalDecided,
+    EventType.APPROVAL_DENIED: ApprovalDecided,
+    EventType.APPROVAL_EXPIRED: ApprovalRef,
+    EventType.APPROVAL_CONSUMED: ApprovalConsumed,
+    EventType.APPROVAL_INVALIDATED: ApprovalInvalidated,
 }
 
 

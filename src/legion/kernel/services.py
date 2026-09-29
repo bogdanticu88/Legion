@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from legion.access.secrets import CredentialResolver, SecretRef
@@ -16,12 +16,19 @@ from legion.domain.errors import Killed
 from legion.domain.grant import Grant
 from legion.events.projections import RunState
 from legion.events.store import EventStore
-from legion.events.types import Event, EventType, _Payload, draft
+from legion.events.types import Event, EventDraft, EventType, _Payload, draft
 from legion.models.resolver import Resolved
 from legion.ports.identity import AgentIdentity, IdentityPort, KillState
 from legion.tools.registry import ToolRegistry
 
 Sleep = Callable[[float], Awaitable[None]]
+# Called at named points ("before:tool.started", "tool:after_invoke", ...). Tests use it to stop
+# a run exactly there, the way a crash would. Does nothing in normal use.
+Faults = Callable[[str], None]
+
+
+def no_faults(point: str) -> None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,7 @@ class Recorder:
     store: EventStore
     state: RunState
     secrets: set[str] = field(default_factory=set)
+    faults: Faults = no_faults
 
     def remember(self, value: str) -> None:
         if len(value) >= MIN_SECRET_LENGTH:
@@ -51,7 +59,7 @@ class Recorder:
     def redact(self, text: str) -> str:
         return redact_text(text, self.secrets)[0]
 
-    async def emit(
+    def draft(
         self,
         kind: EventType,
         payload: _Payload,
@@ -60,7 +68,7 @@ class Recorder:
         agent_id: str | None = None,
         parent_task_id: str | None = None,
         correlation: dict[str, str] | None = None,
-    ) -> Event:
+    ) -> EventDraft:
         new = draft(
             self.state.run_id,
             kind,
@@ -72,17 +80,47 @@ class Recorder:
         )
         if self.secrets:
             new = new.model_copy(update={"payload": _redact_tree(new.payload, self.secrets)})
-        # If we get cancelled mid-append the event may still be committed, and the state has to
-        # know about it or every later append fails on expected_seq.
-        pending = asyncio.ensure_future(self.store.append([new], expected_seq=self.state.last_seq))
-        try:
-            [event] = await asyncio.shield(pending)
-        except asyncio.CancelledError:
-            [event] = await pending
-            self.state.apply(event)
-            raise
-        self.state.apply(event)
+        return new
+
+    async def emit(
+        self,
+        kind: EventType,
+        payload: _Payload,
+        *,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        parent_task_id: str | None = None,
+        correlation: dict[str, str] | None = None,
+    ) -> Event:
+        new = self.draft(
+            kind,
+            payload,
+            task_id=task_id,
+            agent_id=agent_id,
+            parent_task_id=parent_task_id,
+            correlation=correlation,
+        )
+        [event] = await self.append([new])
         return event
+
+    async def append(self, drafts: list[EventDraft]) -> list[Event]:
+        """Write drafts as one atomic batch: either all of them are in the log or none are."""
+        for d in drafts:
+            self.faults(f"before:{d.type.value}")
+        # If we get cancelled mid-append the events may still be committed, and the state has to
+        # know about them or every later append fails on expected_seq.
+        pending = asyncio.ensure_future(self.store.append(drafts, expected_seq=self.state.last_seq))
+        try:
+            events = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            for event in await pending:
+                self.state.apply(event)
+            raise
+        for event in events:
+            self.state.apply(event)
+        for event in events:
+            self.faults(f"after:{event.type.value}")
+        return events
 
 
 MIN_SECRET_LENGTH = 4
@@ -137,7 +175,12 @@ class Kernel:
     settings: Mapping[str, str]
     retry: RetryPolicy
     sleep: Sleep
+    approval_ttl: timedelta = timedelta(hours=1)
     now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
+
+    @property
+    def faults(self) -> Faults:
+        return self.recorder.faults
 
     @property
     def state(self) -> RunState:
@@ -153,7 +196,17 @@ class Kernel:
         payload: _Payload,
         correlation: dict[str, str] | None = None,
     ) -> Event:
-        return await self.recorder.emit(
+        [event] = await self.recorder.append([self.draft(task, kind, payload, correlation)])
+        return event
+
+    def draft(
+        self,
+        task: TaskRuntime,
+        kind: EventType,
+        payload: _Payload,
+        correlation: dict[str, str] | None = None,
+    ) -> EventDraft:
+        return self.recorder.draft(
             kind,
             payload,
             task_id=task.task_id,

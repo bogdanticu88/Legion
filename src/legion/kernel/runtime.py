@@ -6,8 +6,11 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
+
+from pydantic import ValidationError
 
 from legion.access.secrets import CredentialResolver, EnvResolver, SecretRef
 from legion.artifacts import ArtifactStore, MemoryArtifactStore
@@ -16,18 +19,37 @@ from legion.domain.action import EffectClass
 from legion.domain.agent import AgentSpec, ModelFeature
 from legion.domain.budget import Dimension
 from legion.domain.capability import Capability
-from legion.domain.errors import BudgetExceeded, ConfigError, DeadlineExceeded, LegionError
+from legion.domain.errors import (
+    ActionInDoubt,
+    ApprovalRequired,
+    BudgetExceeded,
+    ConfigError,
+    DeadlineExceeded,
+    Disposition,
+    InvalidTransition,
+    LegionError,
+    ResumeRefused,
+)
 from legion.domain.grant import Grant
 from legion.domain.principal import IdentityContext, Principal
-from legion.domain.states import RunStatus
+from legion.domain.states import RunStatus, TaskStatus, is_terminal_run
 from legion.domain.task import TaskSpec
 from legion.events import types as ev
 from legion.events.projections import RunState
 from legion.events.store import EventStore
-from legion.events.types import EventType
+from legion.events.types import EventDraft, EventType
+from legion.kernel.locks import InProcessRunLocks, RunLocks
 from legion.kernel.loop import AgentLoop
 from legion.kernel.pipeline import exceeded_payload
-from legion.kernel.services import Kernel, Recorder, RetryPolicy, Sleep, TaskRuntime
+from legion.kernel.services import (
+    Faults,
+    Kernel,
+    Recorder,
+    RetryPolicy,
+    Sleep,
+    TaskRuntime,
+    no_faults,
+)
 from legion.models.resolver import ModelResolver
 from legion.ports.identity import IdentityPort, NullIdentityPort
 from legion.tools.registry import ToolRegistry
@@ -41,10 +63,28 @@ class RunOutcome:
     structured: dict[str, Any] | None
     error_code: str | None
     error_message: str | None
+    # set when the run is paused
+    approval_id: str | None = None
+    blocked_call: str | None = None
 
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
+
+
+async def load_state(store: EventStore, run_id: str) -> RunState:
+    """Rebuild a run from its log, refusing anything that doesn't verify or doesn't parse."""
+    result = await store.verify(run_id)
+    if result.checked == 0 and result.ok:
+        raise ResumeRefused(f"no run {run_id}")
+    if not result.ok:
+        raise ResumeRefused(
+            f"event log for {run_id} fails verification at seq {result.bad_seq}: {result.reason}"
+        )
+    try:
+        return RunState.from_events(run_id, await store.read(run_id))
+    except (ValueError, ValidationError, InvalidTransition, KeyError) as exc:
+        raise ResumeRefused(f"event log for {run_id} can't be replayed: {exc}") from exc
 
 
 class Legion:
@@ -65,6 +105,9 @@ class Legion:
         sleep: Sleep = asyncio.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         config_hash: str = "",
+        locks: RunLocks | None = None,
+        approval_ttl: timedelta = timedelta(hours=1),
+        faults: Faults = no_faults,
     ) -> None:
         self.resolver = resolver
         self.tools = tools
@@ -80,6 +123,9 @@ class Legion:
         self.sleep = sleep
         self.now = now
         self.config_hash = config_hash
+        self.locks = locks or InProcessRunLocks()
+        self.approval_ttl = approval_ttl
+        self.faults = faults
 
     def check(self, agent: AgentSpec) -> tuple[list[str], list[str]]:
         """Return (errors, warnings). Any error means the agent can't start."""
@@ -107,12 +153,26 @@ class Legion:
                 if not any(c.covers(Capability(name=needed)) for c in requested):
                     errors.append(f"tool {name} needs {needed}, which the agent does not request")
             if tool.spec.effect is EffectClass.EXTERNAL_IRREVERSIBLE:
-                warnings.append(
-                    f"tool {name} is external_irreversible; the default policy denies it"
-                )
+                warnings.append(f"tool {name} is external_irreversible; expect approval requests")
         if agent.budget.cost_usd is not None and resolved and resolved.binding.pricing is None:
             errors.append("agent has a cost budget but the model binding has no pricing")
         return errors, warnings
+
+    def _kernel(self, state: RunState) -> Kernel:
+        return Kernel(
+            recorder=Recorder(self.store, state, faults=self.faults),
+            tools=self.tools,
+            policy=self.policy,
+            identity=self.identity,
+            credentials=self.credentials,
+            credential_bindings=self.credential_bindings,
+            artifacts=self.artifacts,
+            settings=self.settings,
+            retry=self.retry,
+            sleep=self.sleep,
+            approval_ttl=self.approval_ttl,
+            now=self.now,
+        )
 
     async def run(
         self,
@@ -147,64 +207,182 @@ class Legion:
             created_by=principal,
             deadline=deadline,
         )
-        state = RunState(run_id)
-        kernel = Kernel(
-            recorder=Recorder(self.store, state),
-            tools=self.tools,
-            policy=self.policy,
-            identity=self.identity,
-            credentials=self.credentials,
-            credential_bindings=self.credential_bindings,
-            artifacts=self.artifacts,
-            settings=self.settings,
-            retry=self.retry,
-            sleep=self.sleep,
-            now=self.now,
-        )
-        task = TaskRuntime(
-            run_id=run_id,
-            task_id=task_id,
-            parent_task_id=None,
+        with self.locks.hold(run_id):
+            kernel = self._kernel(RunState(run_id))
+            task = TaskRuntime(
+                run_id=run_id,
+                task_id=task_id,
+                parent_task_id=None,
+                agent=agent,
+                grant=grant,
+                identity=await self.identity.agent_identity(agent.name),
+                model=resolved,
+                deadline=deadline,
+            )
+            await kernel.recorder.emit(
+                EventType.RUN_CREATED,
+                ev.RunCreated(
+                    agent=agent.name,
+                    agent_spec=agent.model_dump(mode="json"),
+                    agent_spec_hash=agent.spec_hash,
+                    provider=resolved.binding.provider,
+                    model=resolved.binding.model,
+                    profile=resolved.binding.profile,
+                    grant=grant.model_dump(mode="json"),
+                    root_task_id=task_id,
+                    config_hash=self.config_hash,
+                ),
+            )
+            await kernel.emit(
+                task,
+                EventType.TASK_CREATED,
+                ev.TaskCreated(
+                    task=spec.model_dump(mode="json"), grant_id=grant.id, agent=agent.name
+                ),
+            )
+            await kernel.recorder.emit(EventType.RUN_STARTED, ev.Empty())
+            await self._execute(kernel, task)
+            return _outcome(kernel.state)
+
+    async def resume(self, run_id: str, *, principal: Principal) -> RunOutcome:
+        """Continue a paused or crashed run from its event log.
+
+        What happened, what was charged and what is still open all come from the log, not from
+        memory or the model, and every call that runs again goes through the full pipeline.
+        """
+        with self.locks.hold(run_id):
+            state = await load_state(self.store, run_id)
+            if is_terminal_run(state.status):
+                raise ResumeRefused(f"run {run_id} already {state.status.value}")
+            kernel = self._kernel(state)
+            task = await self._restore(state)
+            view = state.tasks[task.task_id]
+            now = self.now()
+
+            waiting = [
+                a
+                for a in state.approvals.values()
+                if a.status == "requested" and a.call_id not in view.ended and not a.expired(now)
+            ]
+            if waiting:
+                # still up to a human; nothing to write
+                return _outcome(state, approval_id=waiting[0].id)
+
+            drafts: list[EventDraft] = []
+            if state.status is RunStatus.RUNNING and state.active_since and state.last_ts:
+                # The process died mid-run. Charge the time up to its last recorded event so a
+                # crash can't hand the run a fresh wall-clock budget.
+                elapsed = (state.last_ts - state.active_since).total_seconds()
+                drafts.append(self._wall_draft(kernel, task, elapsed))
+            drafts.append(
+                kernel.draft(
+                    task,
+                    EventType.RUN_RESUMED,
+                    ev.Resumed(
+                        by=str(principal),
+                        previous_status=state.status.value,
+                        config_hash=self.config_hash,
+                    ),
+                )
+            )
+            if view.status in (TaskStatus.AWAITING_APPROVAL, TaskStatus.BLOCKED):
+                drafts.append(kernel.draft(task, EventType.TASK_RESUMED, ev.Empty()))
+            await kernel.recorder.append(drafts)
+
+            # Calls that were running when the process stopped. Safe ones get another go through
+            # the pipeline; anything that may have changed the world waits for a person.
+            for call_id, (action_hash, effect) in list(view.in_flight.items()):
+                ref = {"action_hash": action_hash}
+                if EffectClass(effect).safe_to_repeat:
+                    await kernel.emit(
+                        task,
+                        EventType.ACTION_INTERRUPTED,
+                        ev.ActionInterrupted(
+                            call_id=call_id, action_hash=action_hash, effect=effect
+                        ),
+                        ref,
+                    )
+                else:
+                    await kernel.emit(
+                        task,
+                        EventType.ACTION_IN_DOUBT,
+                        ev.ActionInDoubt(
+                            call_id=call_id,
+                            action_hash=action_hash,
+                            effect=effect,
+                            reason="the process stopped while it was running and no result "
+                            "was recorded",
+                        ),
+                        ref,
+                    )
+            if view.in_doubt:
+                await self._block(kernel, task, next(iter(view.in_doubt)), 0.0)
+                return _outcome(state)
+
+            if view.status is TaskStatus.COMPLETED:
+                # crashed between finishing the task and closing the run
+                await kernel.recorder.emit(
+                    EventType.RUN_COMPLETED, ev.RunCompleted(output=view.output or "")
+                )
+                return _outcome(state)
+
+            await self._execute(kernel, task)
+            return _outcome(state)
+
+    async def _restore(self, state: RunState) -> TaskRuntime:
+        # Rebuild the task from what the log recorded when the run started, then check it
+        # against today's configuration. Authority can shrink between runs, never grow.
+        if state.agent_spec is None or state.grant is None or state.root_task_id is None:
+            raise ResumeRefused(f"run {state.run_id} has no run.created event")
+        try:
+            agent = AgentSpec.model_validate(state.agent_spec)
+            grant = Grant.model_validate(state.grant)
+        except ValidationError as exc:
+            raise ResumeRefused(f"recorded agent or grant is invalid: {exc}") from exc
+
+        errors, _ = self.check(agent)
+        wider = [str(c) for c in grant.capabilities if not c.is_within(self.grantable)]
+        if wider:
+            errors.append(f"configuration no longer grants {', '.join(sorted(wider))}")
+        if errors:
+            raise ResumeRefused("; ".join(errors))
+
+        resolved = self.resolver.resolve(agent.model)
+        if (resolved.binding.provider, resolved.binding.model) != (state.provider, state.model):
+            raise ResumeRefused(
+                f"run used {state.provider}/{state.model}, configuration now gives "
+                f"{resolved.binding.provider}/{resolved.binding.model}"
+            )
+
+        view = state.tasks[state.root_task_id]
+        deadline = view.spec.get("deadline")
+        return TaskRuntime(
+            run_id=state.run_id,
+            task_id=view.id,
+            parent_task_id=view.parent_id,
             agent=agent,
             grant=grant,
             identity=await self.identity.agent_identity(agent.name),
             model=resolved,
-            deadline=deadline,
+            deadline=datetime.fromisoformat(deadline) if deadline else None,
         )
-
-        await kernel.recorder.emit(
-            EventType.RUN_CREATED,
-            ev.RunCreated(
-                agent=agent.name,
-                agent_spec=agent.model_dump(mode="json"),
-                agent_spec_hash=agent.spec_hash,
-                provider=resolved.binding.provider,
-                model=resolved.binding.model,
-                profile=resolved.binding.profile,
-                grant=grant.model_dump(mode="json"),
-                root_task_id=task_id,
-                config_hash=self.config_hash,
-            ),
-        )
-        await kernel.emit(
-            task,
-            EventType.TASK_CREATED,
-            ev.TaskCreated(task=spec.model_dump(mode="json"), grant_id=grant.id, agent=agent.name),
-        )
-        await kernel.recorder.emit(EventType.RUN_STARTED, ev.Empty())
-
-        await self._execute(kernel, task)
-        return _outcome(state)
 
     async def _execute(self, kernel: Kernel, task: TaskRuntime) -> None:
         limit = task.grant.budget.wall_seconds
-        timeout = None if limit is None else float(limit)
+        used = kernel.ledger(task).used(Dimension.WALL_SECONDS)
+        timeout = None if limit is None else float(limit) - float(used)
         if task.deadline is not None:
             until_deadline = (task.deadline - self.now()).total_seconds()
             timeout = until_deadline if timeout is None else min(timeout, until_deadline)
         started = time.monotonic()
+
+        def elapsed() -> float:
+            return time.monotonic() - started
+
         try:
             try:
+                if timeout is not None and timeout <= 0:
+                    raise TimeoutError
                 async with asyncio.timeout(timeout):
                     await AgentLoop(kernel).run(task)
             except TimeoutError:
@@ -212,22 +390,37 @@ class Legion:
                 deadline_hit = task.deadline is not None and self.now() >= task.deadline
                 if limit is None or deadline_hit:
                     raise DeadlineExceeded(f"task {task.task_id} passed its deadline") from None
-                elapsed = round(time.monotonic() - started, 3)
-                exceeded = BudgetExceeded(Dimension.WALL_SECONDS.value, limit, elapsed)
+                exceeded = BudgetExceeded(
+                    Dimension.WALL_SECONDS.value, limit, round(float(used) + elapsed(), 3)
+                )
                 await kernel.emit(task, EventType.BUDGET_EXCEEDED, exceeded_payload(task, exceeded))
                 raise exceeded from None
         except LegionError as exc:
+            if exc.disposition is Disposition.ESCALATE:
+                await self._pause(kernel, task, exc, elapsed())
+                return
             await _mark_in_doubt(kernel, task, exc.message)
             failure = ev.Failure(
                 error_code=exc.code, message=exc.message, disposition=exc.disposition.value
             )
-            await kernel.emit(task, EventType.TASK_FAILED, failure)
-            await kernel.recorder.emit(EventType.RUN_FAILED, failure)
+            await kernel.recorder.append(
+                [
+                    self._wall_draft(kernel, task, elapsed()),
+                    kernel.draft(task, EventType.TASK_FAILED, failure),
+                    kernel.draft(task, EventType.RUN_FAILED, failure),
+                ]
+            )
             return
         except asyncio.CancelledError:
             await _mark_in_doubt(kernel, task, "run cancelled")
-            await kernel.emit(task, EventType.TASK_CANCELLED, ev.Cancelled(reason="cancelled"))
-            await kernel.recorder.emit(EventType.RUN_CANCELLED, ev.Cancelled(reason="cancelled"))
+            cancelled = ev.Cancelled(reason="cancelled")
+            await kernel.recorder.append(
+                [
+                    self._wall_draft(kernel, task, elapsed()),
+                    kernel.draft(task, EventType.TASK_CANCELLED, cancelled),
+                    kernel.draft(task, EventType.RUN_CANCELLED, cancelled),
+                ]
+            )
             raise
         except Exception as exc:
             with contextlib.suppress(Exception):
@@ -241,9 +434,63 @@ class Legion:
             await kernel.recorder.emit(EventType.RUN_FAILED, failure)
             raise
         view = kernel.state.tasks[task.task_id]
-        await kernel.recorder.emit(
-            EventType.RUN_COMPLETED, ev.RunCompleted(output=view.output or "")
+        await kernel.recorder.append(
+            [
+                self._wall_draft(kernel, task, elapsed()),
+                kernel.draft(
+                    task, EventType.RUN_COMPLETED, ev.RunCompleted(output=view.output or "")
+                ),
+            ]
         )
+
+    async def _pause(
+        self, kernel: Kernel, task: TaskRuntime, exc: LegionError, spent: float
+    ) -> None:
+        if isinstance(exc, ApprovalRequired):
+            await kernel.recorder.append(
+                [
+                    self._wall_draft(kernel, task, spent),
+                    kernel.draft(
+                        task,
+                        EventType.TASK_AWAITING_APPROVAL,
+                        ev.AwaitingApproval(approval_id=exc.approval_id),
+                    ),
+                    kernel.draft(
+                        task,
+                        EventType.RUN_PAUSED,
+                        ev.Paused(reason="approval", approval_id=exc.approval_id),
+                    ),
+                ]
+            )
+            return
+        if isinstance(exc, ActionInDoubt):
+            view = kernel.state.tasks[task.task_id]
+            if not view.in_doubt:
+                raise RuntimeError("in-doubt pause without an in-doubt action")
+            await self._block(kernel, task, next(reversed(view.in_doubt)), spent)
+            return
+        raise RuntimeError(f"no pause handling for {exc.code}")
+
+    async def _block(self, kernel: Kernel, task: TaskRuntime, call_id: str, spent: float) -> None:
+        reason = "action may or may not have taken effect; an operator has to reconcile it"
+        await kernel.recorder.append(
+            [
+                self._wall_draft(kernel, task, spent),
+                kernel.draft(
+                    task, EventType.TASK_BLOCKED, ev.Blocked(call_id=call_id, reason=reason)
+                ),
+                kernel.draft(
+                    task,
+                    EventType.RUN_PAUSED,
+                    ev.Paused(reason="reconciliation", call_id=call_id),
+                ),
+            ]
+        )
+
+    def _wall_draft(self, kernel: Kernel, task: TaskRuntime, seconds: float) -> EventDraft:
+        amount = Decimal(str(round(max(seconds, 0.0), 3)))
+        record, _ = kernel.ledger(task).charge(Dimension.WALL_SECONDS, amount)
+        return kernel.draft(task, EventType.BUDGET_CONSUMED, record)
 
 
 async def _mark_in_doubt(kernel: Kernel, task: TaskRuntime, reason: str) -> None:
@@ -259,9 +506,12 @@ async def _mark_in_doubt(kernel: Kernel, task: TaskRuntime, reason: str) -> None
         )
 
 
-def _outcome(state: RunState) -> RunOutcome:
+def _outcome(state: RunState, approval_id: str | None = None) -> RunOutcome:
     assert state.root_task_id is not None
     view = state.tasks[state.root_task_id]
+    paused = state.paused
+    if approval_id is None and paused is not None:
+        approval_id = paused.approval_id
     return RunOutcome(
         run_id=state.run_id,
         status=state.status,
@@ -269,4 +519,6 @@ def _outcome(state: RunState) -> RunOutcome:
         structured=view.structured,
         error_code=state.error.error_code if state.error else None,
         error_message=state.error.message if state.error else None,
+        approval_id=approval_id,
+        blocked_call=paused.call_id if paused is not None else None,
     )

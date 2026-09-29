@@ -14,7 +14,7 @@ from legion.domain.errors import MalformedModelResponse
 from legion.domain.messages import Message, TextPart, ToolCallPart, ToolResultPart
 from legion.events.types import Usage
 from legion.models.base import ModelRequest, ModelResponse, StopReason, merge_options
-from legion.models.http import loads_strict, post_json
+from legion.models.http import loads_strict, post_json, token_count
 
 _STOP = {
     "stop": StopReason.END,
@@ -121,7 +121,10 @@ def from_wire(data: dict[str, Any]) -> ModelResponse:
     content = raw.get("content")
     if isinstance(content, str) and content:
         parts.append(TextPart(text=content))
-    for index, call in enumerate(raw.get("tool_calls") or [], start=1):
+    tool_calls = raw.get("tool_calls") or []
+    if not isinstance(tool_calls, list):
+        raise MalformedModelResponse("tool_calls is not a list")
+    for index, call in enumerate(tool_calls, start=1):
         parts.append(_tool_call(index, call))
 
     finish = choices[0].get("finish_reason")
@@ -157,11 +160,11 @@ def _tool_call(index: int, call: Any) -> ToolCallPart:
 def _usage(raw: Any) -> Usage:
     if not isinstance(raw, dict):
         return Usage()
-    prompt = int(raw.get("prompt_tokens") or 0)
+    prompt = token_count(raw.get("prompt_tokens"))
     details = raw.get("prompt_tokens_details")
-    cached = int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
+    cached = token_count(details.get("cached_tokens")) if isinstance(details, dict) else 0
     return Usage(
         input_tokens=max(0, prompt - cached),
-        output_tokens=int(raw.get("completion_tokens") or 0),
+        output_tokens=token_count(raw.get("completion_tokens")),
         cache_read_tokens=cached,
     )

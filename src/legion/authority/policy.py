@@ -8,7 +8,6 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict
 
 from legion.domain.action import Action, EffectClass
-from legion.domain.errors import ConfigError
 from legion.domain.grant import Grant
 
 
@@ -74,21 +73,7 @@ _PRECEDENCE = (Verdict.DENY, Verdict.REQUIRE_APPROVAL, Verdict.ALLOW)
 
 # deny > require_approval > allow, then `default` if nothing matched
 class RuleTablePolicy:
-    def __init__(
-        self,
-        rules: list[Rule],
-        default: Verdict = Verdict.ALLOW,
-        *,
-        approvals_supported: bool = False,
-    ) -> None:
-        if not approvals_supported and (
-            default is Verdict.REQUIRE_APPROVAL
-            or any(r.decision is Verdict.REQUIRE_APPROVAL for r in rules)
-        ):
-            # no approval flow yet, so fail at load time instead of silently denying later
-            raise ConfigError(
-                "policy uses require_approval, but approvals are not available until phase 2"
-            )
+    def __init__(self, rules: list[Rule], default: Verdict = Verdict.ALLOW) -> None:
         self.rules = tuple(rules)
         self.default = default
 
@@ -104,8 +89,8 @@ class RuleTablePolicy:
 def default_rules() -> list[Rule]:
     return [
         Rule(
-            decision=Verdict.DENY,
+            decision=Verdict.REQUIRE_APPROVAL,
             effect=EffectClass.EXTERNAL_IRREVERSIBLE,
-            reason="irreversible actions need human approval, which is not available yet",
+            reason="irreversible actions need a human to approve them",
         )
     ]

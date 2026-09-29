@@ -5,8 +5,10 @@ import getpass
 import json
 import os
 from collections.abc import Coroutine
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import typer
 from rich.console import Console
@@ -18,10 +20,14 @@ from legion.domain.errors import LegionError
 from legion.domain.principal import Principal, PrincipalKind
 from legion.domain.states import RunStatus
 from legion.events.types import Event, EventType
+from legion.kernel import operator
+from legion.kernel.runtime import RunOutcome
 
 app = typer.Typer(help="Legion: run agents through one enforcement path.", no_args_is_help=True)
 agent_app = typer.Typer(help="Work with agent definitions.", no_args_is_help=True)
+approval_app = typer.Typer(help="Inspect approvals.", no_args_is_help=True)
 app.add_typer(agent_app, name="agent")
+app.add_typer(approval_app, name="approval")
 
 out = Console()
 err = Console(stderr=True)
@@ -111,35 +117,18 @@ def validate(
     )
 
 
-@app.command()
-def run(
-    agent_file: Path,
-    objective: str,
-    config: ConfigOption = Path("legion.yaml"),
-    as_json: Annotated[bool, typer.Option("--json", help="Print the outcome as JSON.")] = False,
-) -> None:
-    """Run an agent on an objective."""
-    loaded = _load(config)
-    principal = Principal(kind=PrincipalKind.HUMAN, id=f"local:{getpass.getuser()}")
+def _principal() -> Principal:
+    # The local OS user. Legion doesn't authenticate approvers; anyone who can run this CLI
+    # against the store is trusted (see THREAT_MODEL.md).
+    return Principal(kind=PrincipalKind.HUMAN, id=f"local:{getpass.getuser()}")
 
-    async def go() -> Any:
-        store = loaded.store()
-        try:
-            legion = loaded.build(store)
-            agent = load_agent(agent_file)
-            return await legion.run(agent, objective, principal=principal)
-        finally:
-            await loaded.aclose()
-            store.close()
 
-    try:
-        outcome = _run(go())
-    except LegionError as exc:
-        err.print(f"[red]error:[/red] {exc.message}")
-        raise typer.Exit(2) from exc
+EXIT_PAUSED = 3
 
+
+def _report(outcome: RunOutcome, loaded: Loaded, as_json: bool) -> None:
     if as_json:
-        out.print_json(
+        print(
             json.dumps(
                 {
                     "run_id": outcome.run_id,
@@ -148,6 +137,8 @@ def run(
                     "structured": outcome.structured,
                     "error_code": outcome.error_code,
                     "error": outcome.error_message,
+                    "approval_id": outcome.approval_id,
+                    "blocked_call": outcome.blocked_call,
                 }
             )
         )
@@ -157,8 +148,228 @@ def run(
             out.print(outcome.output)
         if outcome.error_code:
             out.print(f"[red]{outcome.error_code}[/red]: {outcome.error_message}")
+        if outcome.approval_id:
+            out.print("\n[bold]Approval required[/bold]")
+            _show_approval(loaded, outcome.approval_id)
+            out.print(
+                f"\nlegion approve {outcome.approval_id}   or   legion deny {outcome.approval_id}"
+                f"\nthen: legion resume {outcome.run_id}"
+            )
+        elif outcome.blocked_call:
+            out.print(
+                f"\n[bold]Can't continue automatically.[/bold] Call {outcome.blocked_call} may or "
+                "may not have taken effect, and Legion won't run it again on its own.\n"
+                "Check the target system, then record what happened:\n"
+                f"  legion reconcile {outcome.run_id} {outcome.blocked_call} "
+                "--outcome applied|not-applied|abandon"
+            )
+    if outcome.status is RunStatus.PAUSED:
+        raise typer.Exit(EXIT_PAUSED)
     if outcome.status is not RunStatus.COMPLETED:
         raise typer.Exit(1)
+
+
+@app.command()
+def run(
+    agent_file: Path,
+    objective: str,
+    config: ConfigOption = Path("legion.yaml"),
+    as_json: Annotated[bool, typer.Option("--json", help="Print the outcome as JSON.")] = False,
+) -> None:
+    """Run an agent on an objective. Exits 3 if the run pauses for a human."""
+    loaded = _load(config)
+
+    async def go() -> RunOutcome:
+        store = loaded.store()
+        try:
+            legion = loaded.build(store)
+            agent = load_agent(agent_file)
+            return await legion.run(agent, objective, principal=_principal())
+        finally:
+            await loaded.aclose()
+            store.close()
+
+    try:
+        outcome = _run(go())
+    except LegionError as exc:
+        err.print(f"[red]error:[/red] {exc.message}")
+        raise typer.Exit(2) from exc
+    _report(outcome, loaded, as_json)
+
+
+@app.command()
+def resume(
+    run_id: str,
+    config: ConfigOption = Path("legion.yaml"),
+    as_json: Annotated[bool, typer.Option("--json", help="Print the outcome as JSON.")] = False,
+) -> None:
+    """Continue a paused or crashed run from its event log."""
+    loaded = _load(config)
+
+    async def go() -> RunOutcome:
+        store = loaded.store()
+        try:
+            return await loaded.build(store).resume(run_id, principal=_principal())
+        finally:
+            await loaded.aclose()
+            store.close()
+
+    try:
+        outcome = _run(go())
+    except LegionError as exc:
+        err.print(f"[red]error:[/red] {exc.message}")
+        raise typer.Exit(2) from exc
+    _report(outcome, loaded, as_json)
+
+
+def _show_approval(loaded: Loaded, approval_id: str) -> None:
+    store = loaded.store()
+    try:
+        state, approval = _run(operator.find(store, approval_id))
+    finally:
+        store.close()
+    s = approval.subject
+    expired = approval.expired(datetime.now(UTC))
+    rows = [
+        ("approval", approval.id),
+        (
+            "status",
+            approval.status + (" (expired)" if expired and approval.status == "requested" else ""),
+        ),
+        ("run", f"{state.run_id}   task {approval.task_id}   call {approval.call_id}"),
+        ("agent", f"{s.get('agent')} acting for {', '.join(s.get('on_behalf_of', []))}"),
+        ("objective", str(s.get("objective", ""))),
+        ("tool", f"{s.get('tool')}: {s.get('description', '')}"),
+        ("effect", str(s.get("effect"))),
+        ("target", str(s.get("resource") or "(no resource)")),
+        ("needs", ", ".join(s.get("required", [])) or "-"),
+        ("expires", approval.expires_at.isoformat(timespec="seconds")),
+    ]
+    if approval.decided_by:
+        rows.append(("decided by", f"{approval.decided_by} {approval.note}".strip()))
+    table = Table(show_header=False, box=None)
+    for label, value in rows:
+        table.add_row(f"[bold]{label}[/bold]", value)
+    out.print(table)
+    out.print("[bold]arguments[/bold]")
+    out.print_json(json.dumps(s.get("arguments", {}), sort_keys=True))
+    if s.get("model_note"):
+        out.print(f"[bold]model says (untrusted)[/bold]\n{s['model_note']}", highlight=False)
+    out.print(f"[dim]binding {approval.binding_hash}[/dim]")
+
+
+@app.command()
+def approvals(config: ConfigOption = Path("legion.yaml")) -> None:
+    """List approvals waiting for a decision."""
+    loaded = _load(config)
+    store = loaded.store()
+    try:
+        pending = _run(operator.approvals(store))
+    finally:
+        store.close()
+    table = Table(
+        Column("approval", no_wrap=True), Column("run", no_wrap=True), "tool", "target", "expires"
+    )
+    for p in pending:
+        expires = p.approval.expires_at.isoformat(timespec="minutes")
+        table.add_row(
+            p.approval.id,
+            p.run_id,
+            str(p.approval.subject.get("tool")),
+            str(p.approval.subject.get("resource") or "-"),
+            "[red]expired[/red]" if p.expired else expires,
+        )
+    out.print(table)
+
+
+@approval_app.command("show")
+def approval_show(approval_id: str, config: ConfigOption = Path("legion.yaml")) -> None:
+    """Show exactly what an approval would allow."""
+    loaded = _load(config)
+    try:
+        _show_approval(loaded, approval_id)
+    except LegionError as exc:
+        err.print(f"[red]error:[/red] {exc.message}")
+        raise typer.Exit(2) from exc
+
+
+def _decide(approval_id: str, config: Path, *, approve: bool, note: str) -> None:
+    loaded = _load(config)
+    store = loaded.store()
+    try:
+        approval = _run(
+            operator.decide(
+                store, loaded.locks(), approval_id, approve=approve, by=_principal(), note=note
+            )
+        )
+    except LegionError as exc:
+        err.print(f"[red]error:[/red] {exc.message}")
+        raise typer.Exit(2) from exc
+    finally:
+        store.close()
+    out.print(f"{approval.id}: {approval.status}")
+    out.print(f"next: legion resume {approval.subject.get('run_id')}")
+
+
+NoteOption = Annotated[str, typer.Option("--note", help="Recorded with the decision.")]
+
+
+@app.command()
+def approve(
+    approval_id: str, config: ConfigOption = Path("legion.yaml"), note: NoteOption = ""
+) -> None:
+    """Approve one specific proposed action. Check it with `legion approval show` first."""
+    _decide(approval_id, config, approve=True, note=note)
+
+
+@app.command()
+def deny(
+    approval_id: str, config: ConfigOption = Path("legion.yaml"), note: NoteOption = ""
+) -> None:
+    """Deny a proposed action. The agent is told, and can try something else."""
+    _decide(approval_id, config, approve=False, note=note)
+
+
+class Outcome(StrEnum):
+    APPLIED = "applied"
+    NOT_APPLIED = "not-applied"
+    ABANDON = "abandon"
+
+
+_OUTCOMES: dict[Outcome, Literal["applied", "not_applied", "abandon"]] = {
+    Outcome.APPLIED: "applied",
+    Outcome.NOT_APPLIED: "not_applied",
+    Outcome.ABANDON: "abandon",
+}
+
+
+@app.command()
+def reconcile(
+    run_id: str,
+    call_id: str,
+    outcome: Annotated[Outcome, typer.Option("--outcome", help="What actually happened.")],
+    config: ConfigOption = Path("legion.yaml"),
+    note: NoteOption = "",
+) -> None:
+    """Record whether an in-doubt action took effect, so the run can continue (or stop)."""
+    loaded = _load(config)
+    store = loaded.store()
+    value = _OUTCOMES[outcome]
+    try:
+        _run(
+            operator.reconcile(
+                store, loaded.locks(), run_id, call_id, outcome=value, by=_principal(), note=note
+            )
+        )
+    except LegionError as exc:
+        err.print(f"[red]error:[/red] {exc.message}")
+        raise typer.Exit(2) from exc
+    finally:
+        store.close()
+    if outcome is Outcome.ABANDON:
+        out.print(f"run {run_id}: failed (abandoned)")
+    else:
+        out.print(f"recorded. next: legion resume {run_id}")
 
 
 @app.command()
@@ -267,6 +478,29 @@ def describe(event: Event) -> str:
             return repr(p["output"][:80])
         case EventType.TASK_FAILED | EventType.RUN_FAILED:
             return f"{p['error_code']}: {p['message']}"
+        case EventType.APPROVAL_REQUESTED:
+            subject = p["subject"]
+            target = f" on {subject['resource']}" if subject.get("resource") else ""
+            return f"{p['approval_id']} for {subject['tool']}{target}"
+        case EventType.APPROVAL_GRANTED | EventType.APPROVAL_DENIED:
+            return f"{p['approval_id']} by {p['by']} {p['note']}".rstrip()
+        case (
+            EventType.APPROVAL_EXPIRED
+            | EventType.APPROVAL_CONSUMED
+            | EventType.APPROVAL_INVALIDATED
+            | EventType.TASK_AWAITING_APPROVAL
+        ):
+            return str(p["approval_id"])
+        case EventType.RUN_PAUSED:
+            return f"{p['reason']} {p.get('approval_id') or p.get('call_id') or ''}".rstrip()
+        case EventType.RUN_RESUMED:
+            return f"by {p['by']} (was {p['previous_status']})"
+        case EventType.TASK_BLOCKED:
+            return f"{p['call_id']}: {p['reason']}"
+        case EventType.ACTION_INTERRUPTED:
+            return f"{p['call_id']} [{p['effect']}] will run again"
+        case EventType.ACTION_RECONCILED:
+            return f"{p['call_id']} {p['outcome']} by {p['by']}"
         case EventType.OUTPUT_REJECTED:
             return str(p["reason"])
         case _:

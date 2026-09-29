@@ -74,4 +74,24 @@ def write_summary(args: WriteArgs, ctx: ToolContext) -> str:
     return f"wrote {len(args.text)} characters to {args.path}"
 
 
-TOOLS = [list_notes, read_note, write_summary]
+class PublishArgs(BaseModel):
+    channel: str = Field(pattern=r"^[a-z0-9-]{1,32}$", description="Where to publish, e.g. team.")
+    text: str = Field(max_length=2_000)
+
+
+# "Publishing" here just writes a file, but it stands in for something you can't take back
+# (a message, a deploy), so it's declared irreversible and the default policy asks a human.
+@tool(
+    effect=EffectClass.EXTERNAL_IRREVERSIBLE,
+    capabilities=["notes.publish"],
+    resource=lambda a: a.channel,
+)
+def publish_summary(args: PublishArgs, ctx: ToolContext) -> str:
+    """Publish a summary to a channel. Once published it can't be unpublished."""
+    target = _inside(ctx, f"published/{args.channel}.md")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(args.text, encoding="utf-8")
+    return f"published to {args.channel}"
+
+
+TOOLS = [list_notes, read_note, write_summary, publish_summary]

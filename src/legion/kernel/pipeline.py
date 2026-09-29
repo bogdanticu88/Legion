@@ -1,6 +1,7 @@
 # Every tool call goes through ActionPipeline.execute, in this order:
 #   kill check, lookup, schema + resource, repeat check, grant, policy, external authority,
-#   credentials, budget, run (timeout, retries), output check, redaction.
+#   approval (if policy asks for one), credentials, budget, run (timeout, retries), output check,
+#   redaction. A resumed run goes through exactly the same steps.
 
 from __future__ import annotations
 
@@ -19,7 +20,11 @@ from legion.domain.capability import Capability
 from legion.domain.errors import (
     ActionInDoubt,
     ActionRefused,
-    ApprovalUnavailable,
+    ApprovalDenied,
+    ApprovalExpired,
+    ApprovalMismatch,
+    ApprovalRequired,
+    ApprovalReused,
     BudgetExceeded,
     CapabilityDenied,
     CredentialUnavailable,
@@ -39,6 +44,7 @@ from legion.domain.errors import (
 from legion.domain.messages import ToolCallPart
 from legion.events import types as ev
 from legion.events.types import EventType
+from legion.kernel import approvals
 from legion.kernel.services import Kernel, TaskRuntime, redact_text
 from legion.tools.base import Tool, ToolContext, ToolResult
 
@@ -104,7 +110,7 @@ class ActionPipeline:
                 action,
             )
 
-        refusal = await self._authorize(call, action, task)
+        refusal = await self._authorize(call, action, task, tool)
         if refusal is not None:
             return await self._refuse(task, call, refusal, action)
 
@@ -144,7 +150,7 @@ class ActionPipeline:
         return action
 
     async def _authorize(
-        self, call: ToolCallPart, action: Action, task: TaskRuntime
+        self, call: ToolCallPart, action: Action, task: TaskRuntime, tool: Tool
     ) -> ActionRefused | None:
         if task.grant.expired(self.k.now()):
             raise GrantExpired(f"grant {task.grant.id} has expired")
@@ -157,12 +163,16 @@ class ActionPipeline:
         )
         if decision.verdict is Verdict.DENY:
             return PolicyDenied("; ".join(decision.reasons) or "denied by policy")
-        if decision.verdict is Verdict.REQUIRE_APPROVAL:
-            return ApprovalUnavailable("this action needs human approval, which is not available")
 
         external = await self.k.identity.authorize(action, task.identity)
         if not external.allowed:
             return PolicyDenied(f"{external.source}: {external.reason or 'denied'}")
+
+        # Only ask a human once everything else has said yes.
+        if decision.verdict is Verdict.REQUIRE_APPROVAL:
+            refusal = await self._approval(call, action, task, tool)
+            if refusal is not None:
+                return refusal
 
         await self.k.emit(
             task,
@@ -173,6 +183,95 @@ class ActionPipeline:
                 reasons=[*decision.reasons, f"{external.source}: {external.reason}"],
             ),
             correlation={"action_hash": action.hash},
+        )
+        return None
+
+    async def _approval(
+        self, call: ToolCallPart, action: Action, task: TaskRuntime, tool: Tool
+    ) -> ActionRefused | None:
+        view = self.k.state.tasks[task.task_id]
+        bound = approvals.binding(
+            task=task,
+            call=call,
+            action=action,
+            tool=tool.spec,
+            settings=self.k.settings,
+            credential_refs={k: str(v) for k, v in self.k.credential_bindings.items()},
+        )
+        expected = approvals.binding_hash(bound)
+        now = self.k.now()
+        approval_id = view.approval_for_call.get(call.id)
+
+        if approval_id is None:
+            approval_id = approvals.new_approval_id()
+            note = view.last_message.text if view.last_message else ""
+            await self.k.emit(
+                task,
+                EventType.APPROVAL_REQUESTED,
+                ev.ApprovalRequested(
+                    approval_id=approval_id,
+                    call_id=call.id,
+                    action_hash=action.hash,
+                    binding_hash=expected,
+                    subject=approvals.subject(
+                        task=task,
+                        call=call,
+                        action=action,
+                        tool=tool.spec,
+                        objective=str(view.spec.get("objective", "")),
+                        model_note=note,
+                    ),
+                    expires_at=now + self.k.approval_ttl,
+                ),
+                {"action_hash": action.hash, "approval_id": approval_id},
+            )
+            raise ApprovalRequired(f"{action.tool} needs approval {approval_id}", approval_id)
+
+        approval = self.k.state.approvals[approval_id]
+        ref = {"action_hash": action.hash, "approval_id": approval_id}
+        if approval.status in ("requested", "granted") and approval.expired(now):
+            await self.k.emit(
+                task, EventType.APPROVAL_EXPIRED, ev.ApprovalRef(approval_id=approval_id), ref
+            )
+            return ApprovalExpired(f"approval {approval_id} expired before it was used")
+        if approval.status == "requested":
+            raise ApprovalRequired(f"still waiting for approval {approval_id}", approval_id)
+        if approval.status == "denied":
+            note = f": {approval.note}" if approval.note else ""
+            return ApprovalDenied(f"{approval.decided_by} denied this action{note}")
+        if approval.status == "expired":
+            return ApprovalExpired(f"approval {approval_id} expired before it was used")
+        if approval.status == "invalidated":
+            return ApprovalMismatch(f"approval {approval_id} no longer matches this action")
+
+        # granted or consumed; either way it has to be for exactly this action
+        if approval.binding_hash != expected:
+            if approval.status == "granted":
+                await self.k.emit(
+                    task,
+                    EventType.APPROVAL_INVALIDATED,
+                    ev.ApprovalInvalidated(
+                        approval_id=approval_id, reason="the action changed after approval"
+                    ),
+                    ref,
+                )
+            return ApprovalMismatch(f"approval {approval_id} does not match this action")
+        if approval.status == "consumed":
+            # A crash between consuming the approval and starting the tool must not cost the
+            # approval, and a safe-to-repeat call interrupted mid-run may try again. Anything
+            # else is a replay.
+            same_call = approval.consumed_by == call.id
+            if same_call and (call.id not in view.started or action.effect.safe_to_repeat):
+                return None
+            return ApprovalReused(f"approval {approval_id} has already been used")
+
+        # Consume before running, so a crash after this point can't make the approval usable
+        # for a second, different execution.
+        await self.k.emit(
+            task,
+            EventType.APPROVAL_CONSUMED,
+            ev.ApprovalConsumed(approval_id=approval_id, call_id=call.id),
+            ref,
         )
         return None
 
@@ -205,6 +304,8 @@ class ActionPipeline:
             call_id=call.id,
             credentials=secrets,
             settings=self.k.settings,
+            # same value on every retry and after a resume, so an idempotent API can dedupe
+            idempotency_key=action.hash,
         )
         correlation = {"action_hash": action.hash}
         attempt = 0
@@ -227,10 +328,12 @@ class ActionPipeline:
             started = time.monotonic()
             error: LegionError | None = None
             result: ToolResult | None = None
+            self.k.faults("tool:before_invoke")
             try:
                 result = await asyncio.wait_for(
                     tool.invoke(dict(call.arguments), context), spec.timeout_s
                 )
+                self.k.faults("tool:after_invoke")
             except TimeoutError:
                 error = ToolTimeout(f"{spec.name} did not finish within {spec.timeout_s}s")
             except ActionInDoubt as exc:

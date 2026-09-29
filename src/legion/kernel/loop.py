@@ -19,6 +19,8 @@ from legion.domain.errors import (
     LegionError,
     MalformedModelResponse,
 )
+from legion.domain.messages import Message, Part, ToolCallPart
+from legion.domain.states import TaskStatus
 from legion.events import types as ev
 from legion.events.types import EventType
 from legion.kernel.pipeline import ActionPipeline, exceeded_payload
@@ -34,18 +36,32 @@ class AgentLoop:
         self.pipeline = ActionPipeline(kernel)
 
     async def run(self, task: TaskRuntime) -> None:
-        await self.k.emit(task, EventType.TASK_STARTED, ev.Empty())
+        if self.k.state.tasks[task.task_id].status is TaskStatus.PENDING:
+            await self.k.emit(task, EventType.TASK_STARTED, ev.Empty())
         while True:
-            await self._step(task)
-            response = await self._call_model(task, self._request(task))
-            calls = response.message.tool_calls
-            if calls:
-                # sequential for now; parallel calls come with the Phase 3 scheduler
-                for call in calls:
-                    await self.pipeline.execute(call, task)
-                continue
-            if await self._finish(task, response):
+            if await self._settle(task):
                 return
+            await self._step(task)
+            await self._call_model(task, self._request(task))
+
+    async def _settle(self, task: TaskRuntime) -> bool:
+        # Finish whatever the last model turn left open. After a fresh response that's all of it;
+        # after a resume it's whatever the log says hasn't ended yet. Returns True when the task
+        # is complete.
+        view = self.k.state.tasks[task.task_id]
+        message = view.last_message
+        if message is None:
+            return False
+        if view.awaiting_finish:
+            return await self._finish(task, message.text, view.last_stop)
+        # sequential for now; parallel calls come with the Phase 3 scheduler
+        for call in message.tool_calls:
+            if call.id in view.ended:
+                continue
+            await self.pipeline.execute(call, task)
+            if call.id not in view.ended:
+                raise RuntimeError(f"pipeline returned without ending call {call.id}")
+        return False
 
     async def _step(self, task: TaskRuntime) -> None:
         now = self.k.now()
@@ -110,6 +126,7 @@ class AgentLoop:
                 ),
             )
             started = time.monotonic()
+            self.k.faults("model:before_call")
             try:
                 response = await task.model.provider.generate(request)
                 try:
@@ -137,26 +154,42 @@ class AgentLoop:
                     await self.k.sleep(delay)
                     continue
                 raise
+            self.k.faults("model:after_response")
+            response = _unique_call_ids(response, self.k.state.tasks[task.task_id].transcript)
             cost = binding.pricing.cost(response.usage) if binding.pricing else None
-            await self.k.emit(
-                task,
-                EventType.MODEL_RESPONDED,
-                ev.ModelResponded(
-                    attempt=attempt,
-                    message=response.message,
-                    stop_reason=response.stop_reason.value,
-                    usage=response.usage,
-                    cost_usd=cost,
-                    latency_ms=int((time.monotonic() - started) * 1000),
-                ),
-            )
-            await self._charge_after(task, Dimension.TOKENS, Decimal(response.usage.total))
+            # The response and what it cost go into the log together, so a crash can't leave a
+            # recorded response whose tokens were never charged.
+            ledger = self.k.ledger(task)
+            charges = [(Dimension.TOKENS, Decimal(response.usage.total))]
             if cost is not None:
-                await self._charge_after(task, Dimension.COST_USD, cost)
+                charges.append((Dimension.COST_USD, cost))
+            drafts = [
+                self.k.draft(
+                    task,
+                    EventType.MODEL_RESPONDED,
+                    ev.ModelResponded(
+                        attempt=attempt,
+                        message=response.message,
+                        stop_reason=response.stop_reason.value,
+                        usage=response.usage,
+                        cost_usd=cost,
+                        latency_ms=int((time.monotonic() - started) * 1000),
+                    ),
+                )
+            ]
+            over = []
+            for dimension, amount in charges:
+                record, exceeded = ledger.charge(dimension, amount)
+                drafts.append(self.k.draft(task, EventType.BUDGET_CONSUMED, record))
+                if exceeded:
+                    over.append((dimension, record.total))
+            await self.k.recorder.append(drafts)
+            for dimension, total in over:
+                limit = task.grant.budget.limit(dimension)
+                await self._exceeded(task, BudgetExceeded(dimension.value, limit, total))
             return response
 
-    async def _finish(self, task: TaskRuntime, response: ModelResponse) -> bool:
-        text = response.message.text
+    async def _finish(self, task: TaskRuntime, text: str, stop_reason: str | None) -> bool:
         schema = task.agent.output_schema
         structured = None
         if schema is not None:
@@ -182,7 +215,7 @@ class AgentLoop:
             ev.TaskCompleted(
                 output=text,
                 structured=structured,
-                truncated=response.stop_reason is StopReason.MAX_TOKENS,
+                truncated=stop_reason == StopReason.MAX_TOKENS.value,
             ),
         )
         return True
@@ -196,18 +229,33 @@ class AgentLoop:
         record, _ = ledger.charge(dimension, 1)
         await self.k.emit(task, EventType.BUDGET_CONSUMED, record)
 
-    async def _charge_after(self, task: TaskRuntime, dimension: Dimension, amount: Decimal) -> None:
-        record, over = self.k.ledger(task).charge(dimension, amount)
-        await self.k.emit(task, EventType.BUDGET_CONSUMED, record)
-        if over:
-            await self._exceeded(
-                task,
-                BudgetExceeded(dimension.value, task.grant.budget.limit(dimension), record.total),
-            )
-
     async def _exceeded(self, task: TaskRuntime, exc: BudgetExceeded) -> NoReturn:
         await self.k.emit(task, EventType.BUDGET_EXCEEDED, exceeded_payload(task, exc))
         raise exc
+
+
+def _unique_call_ids(response: ModelResponse, transcript: list[Message]) -> ModelResponse:
+    # Everything about a call (approval, in-flight, in doubt) is keyed by its id, and some servers
+    # reuse ids across turns. Rename clashes before the response is recorded; the model only ever
+    # sees the recorded version, so the rename is consistent from then on.
+    seen = {c.id for m in transcript for c in m.tool_calls}
+    parts: list[Part] = []
+    changed = False
+    for part in response.message.parts:
+        if isinstance(part, ToolCallPart):
+            new_id, n = part.id, 1
+            while new_id in seen:
+                n += 1
+                new_id = f"{part.id}_{n}"
+            seen.add(new_id)
+            if new_id != part.id:
+                part = part.model_copy(update={"id": new_id})
+                changed = True
+        parts.append(part)
+    if not changed:
+        return response
+    message = response.message.model_copy(update={"parts": tuple(parts)})
+    return response.model_copy(update={"message": message})
 
 
 def _strip_fence(text: str) -> str:

@@ -51,13 +51,19 @@ class ScriptedProvider:
     kind = "scripted"
     supported = frozenset(ModelFeature) - {ModelFeature.STREAMING}
 
-    def __init__(self, steps: Sequence[Step]) -> None:
+    def __init__(self, steps: Sequence[Step], *, by_turn: bool = False) -> None:
+        # by_turn: pick the step from how many assistant turns the conversation already has,
+        # instead of counting calls. Then a resumed run, in a new process, carries on where the
+        # script left off rather than starting over.
         self._steps = list(steps)
         self._next = 0
+        self.by_turn = by_turn
         self.requests: list[ModelRequest] = []
 
     async def generate(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
+        if self.by_turn:
+            self._next = sum(1 for m in request.messages if m.role == "assistant")
         if self._next >= len(self._steps):
             raise ModelRequestRejected("scripted provider has no more turns")
         step = self._steps[self._next]
@@ -79,7 +85,7 @@ class ScriptedProvider:
             raise ConfigError(f"cannot read script {path}: {exc}") from exc
         if not isinstance(turns, list):
             raise ConfigError(f"script {path} must be a list of turns")
-        return cls([_turn(i, t) for i, t in enumerate(turns, start=1)])
+        return cls([_turn(i, t) for i, t in enumerate(turns, start=1)], by_turn=True)
 
 
 def _turn(index: int, turn: Any) -> ModelResponse:

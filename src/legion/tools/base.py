@@ -64,6 +64,7 @@ class ToolContext:
     call_id: str
     credentials: Mapping[str, Secret] = field(default_factory=dict)
     settings: Mapping[str, str] = field(default_factory=dict)
+    idempotency_key: str = ""
 
 
 class ToolResult(BaseModel):

@@ -36,7 +36,8 @@ async def test_happy_path_reads_and_writes() -> None:
     assert h.files.content["out/x.md"] == "summary"
     types = await h.types(outcome.run_id)
     assert types[:3] == [E.RUN_CREATED, E.TASK_CREATED, E.RUN_STARTED]
-    assert types[-2:] == [E.TASK_COMPLETED, E.RUN_COMPLETED]
+    assert types[-1] is E.RUN_COMPLETED
+    assert types.index(E.TASK_COMPLETED) < types.index(E.RUN_COMPLETED)
     assert types.count(E.TOOL_COMPLETED) == 2
     assert (await h.store.verify(outcome.run_id)).ok
 
@@ -208,8 +209,8 @@ async def test_write_timeout_in_doubt() -> None:
 
     h = build([call("slow_write", {}), reply("never")], extra_tools=[slow_write])
     outcome = await h.run(agent(tools=["slow_write"], capabilities=["files.write:out/**"]))
-    assert outcome.status is RunStatus.FAILED
-    assert outcome.error_code == "action_in_doubt"
+    assert outcome.status is RunStatus.PAUSED
+    assert outcome.blocked_call == "call_1"
     assert len(attempts) == 1
     assert len(await h.payloads(outcome.run_id, E.ACTION_IN_DOUBT)) == 1
 
@@ -389,8 +390,9 @@ async def test_secret_redacted_on_fatal_error(tmp_path: Path) -> None:
         grantable=("api.write",),
     )
     outcome = await h.run(agent(tools=["leaky"], capabilities=["api.write"]))
-    assert outcome.error_code == "action_in_doubt"
-    assert sentinel not in (outcome.error_message or "")
+    assert outcome.status is RunStatus.PAUSED
+    [doubt] = await h.payloads(outcome.run_id, E.ACTION_IN_DOUBT)
+    assert "[redacted]" in doubt["reason"]
     store.close()
     for path in tmp_path.iterdir():
         assert sentinel.encode() not in path.read_bytes(), path

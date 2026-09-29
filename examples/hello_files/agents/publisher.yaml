@@ -1,0 +1,17 @@
+name: notes-publisher
+description: Publishes a short summary to the team channel.
+instructions: |
+  Publish a one-line summary of the planning meeting to the team channel with publish_summary.
+model:
+  profile: demo/publisher
+  needs: [tools]
+tools: [read_note, publish_summary]
+capabilities:
+  - files.read:notes/**
+  - notes.publish:team
+budget:
+  steps: 6
+  model_calls: 8
+  tool_calls: 4
+  tokens: 20000
+  wall_seconds: 120

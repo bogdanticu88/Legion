@@ -16,7 +16,7 @@ from legion.domain.messages import (
 )
 from legion.events.types import Usage
 from legion.models.base import ModelRequest, ModelResponse, StopReason, merge_options
-from legion.models.http import post_json
+from legion.models.http import post_json, token_count
 
 API_VERSION = "2023-06-01"
 
@@ -130,9 +130,9 @@ def from_wire(data: dict[str, Any]) -> ModelResponse:
         message=Message(role="assistant", parts=tuple(parts)),
         stop_reason=stop,
         usage=Usage(
-            input_tokens=int(usage.get("input_tokens") or 0),
-            output_tokens=int(usage.get("output_tokens") or 0),
-            cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
-            cache_write_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            input_tokens=token_count(usage.get("input_tokens")),
+            output_tokens=token_count(usage.get("output_tokens")),
+            cache_read_tokens=token_count(usage.get("cache_read_input_tokens")),
+            cache_write_tokens=token_count(usage.get("cache_creation_input_tokens")),
         ),
     )

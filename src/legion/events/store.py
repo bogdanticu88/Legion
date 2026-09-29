@@ -69,9 +69,19 @@ def summarize(run_id: str, events: Sequence[Event]) -> RunSummary:
     agent = str(created.payload.get("agent", "?")) if created.type is EventType.RUN_CREATED else "?"
     status = "created"
     for event in events:
-        if event.type.value.startswith("run."):
-            status = event.type.value.removeprefix("run.")
+        if event.type in _RUN_STATUS:
+            status = _RUN_STATUS[event.type]
     return RunSummary(run_id, agent, created.ts, status, len(events))
+
+
+_RUN_STATUS = {
+    EventType.RUN_STARTED: "running",
+    EventType.RUN_RESUMED: "running",
+    EventType.RUN_PAUSED: "paused",
+    EventType.RUN_COMPLETED: "completed",
+    EventType.RUN_FAILED: "failed",
+    EventType.RUN_CANCELLED: "cancelled",
+}
 
 
 def _check_single_run(drafts: Sequence[EventDraft]) -> str:

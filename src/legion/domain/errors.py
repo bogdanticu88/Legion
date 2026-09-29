@@ -1,4 +1,5 @@
-# The loop only looks at `disposition`, never at the exception type.
+# The loop only looks at `disposition`, never at the exception type. `escalate` pauses the run
+# until a human does something (approve, deny, reconcile).
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ class Disposition(StrEnum):
     RETRYABLE = "retryable"
     RECOVERABLE = "recoverable"
     FATAL = "fatal"
+    ESCALATE = "escalate"
 
 
 class LegionError(Exception):
@@ -141,6 +143,7 @@ class InvalidToolOutput(LegionError):
 # a write may or may not have happened
 class ActionInDoubt(LegionError):
     code = "action_in_doubt"
+    disposition = Disposition.ESCALATE
 
 
 class CredentialUnavailable(LegionError):
@@ -172,5 +175,34 @@ class FinalOutputInvalid(LegionError):
     code = "final_output_invalid"
 
 
-class ApprovalUnavailable(ActionRefused):
-    code = "approval_unavailable"
+class ApprovalRequired(LegionError):
+    code = "approval_required"
+    disposition = Disposition.ESCALATE
+
+    def __init__(self, message: str, approval_id: str) -> None:
+        super().__init__(message)
+        self.approval_id = approval_id
+
+
+class ApprovalDenied(ActionRefused):
+    code = "approval_denied"
+
+
+class ApprovalExpired(ActionRefused):
+    code = "approval_expired"
+
+
+class ApprovalMismatch(ActionRefused):
+    code = "approval_mismatch"
+
+
+class ApprovalReused(ActionRefused):
+    code = "approval_reused"
+
+
+class RunLocked(LegionError):
+    code = "run_locked"
+
+
+class ResumeRefused(LegionError):
+    code = "resume_refused"

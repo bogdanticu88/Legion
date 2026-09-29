@@ -1,0 +1,11 @@
+# Publishing is irreversible, so the run stops at the second turn until someone approves it.
+- tool_calls:
+    - name: read_note
+      arguments: {path: notes/meeting.md}
+- text: Publishing the summary to the team channel.
+  tool_calls:
+    - name: publish_summary
+      arguments:
+        channel: team
+        text: "Launch moved to 14 November. Dana owns the rollout checklist."
+- text: Published the meeting summary to the team channel.

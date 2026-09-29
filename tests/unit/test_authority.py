@@ -8,7 +8,7 @@ from legion.authority.policy import Rule, RuleTablePolicy, Verdict, default_rule
 from legion.domain.action import Action, EffectClass
 from legion.domain.budget import BudgetLimits, Dimension
 from legion.domain.capability import Capability
-from legion.domain.errors import BudgetExceeded, ConfigError
+from legion.domain.errors import BudgetExceeded
 from legion.domain.grant import AttenuationError, Grant
 from legion.domain.principal import IdentityContext
 from legion.events.projections import RunState
@@ -179,16 +179,16 @@ class TestPolicy:
         assert denied.verdict is Verdict.DENY
         assert denied.reasons == ("default deny",)
 
-    async def test_default_rules_deny_irreversible(self) -> None:
+    async def test_default_rules_ask_before_irreversible(self) -> None:
         policy = RuleTablePolicy(default_rules())
         decision = await policy.evaluate(action(effect=EffectClass.EXTERNAL_IRREVERSIBLE), None)  # type: ignore[arg-type]
-        assert decision.verdict is Verdict.DENY
+        assert decision.verdict is Verdict.REQUIRE_APPROVAL
 
-    def test_approval_refused_until_supported(self) -> None:
-        with pytest.raises(ConfigError):
-            RuleTablePolicy([Rule(decision=Verdict.REQUIRE_APPROVAL)])
-        with pytest.raises(ConfigError):
-            RuleTablePolicy([], default=Verdict.REQUIRE_APPROVAL)
+    async def test_deny_beats_approval(self) -> None:
+        policy = RuleTablePolicy(
+            [Rule(decision=Verdict.REQUIRE_APPROVAL), Rule(decision=Verdict.DENY, tool="t")]
+        )
+        assert (await policy.evaluate(action(), None)).verdict is Verdict.DENY  # type: ignore[arg-type]
 
 
 def test_grant_round_trips_through_json() -> None:

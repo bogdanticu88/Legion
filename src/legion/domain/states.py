@@ -19,6 +19,8 @@ class TaskStatus(StrEnum):
     RUNNING = "running"
     WAITING_CHILDREN = "waiting_children"
     AWAITING_APPROVAL = "awaiting_approval"
+    # an action is in doubt and an operator has to say whether it happened
+    BLOCKED = "blocked"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -41,6 +43,7 @@ _TASK: dict[TaskStatus, frozenset[TaskStatus]] = {
         {
             TaskStatus.WAITING_CHILDREN,
             TaskStatus.AWAITING_APPROVAL,
+            TaskStatus.BLOCKED,
             TaskStatus.COMPLETED,
             TaskStatus.FAILED,
             TaskStatus.CANCELLED,
@@ -52,6 +55,7 @@ _TASK: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.AWAITING_APPROVAL: frozenset(
         {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED}
     ),
+    TaskStatus.BLOCKED: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED}),
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.FAILED: frozenset(),
     TaskStatus.CANCELLED: frozenset(),
