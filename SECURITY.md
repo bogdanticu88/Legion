@@ -13,8 +13,10 @@ rather I didn't.
 - A task acting outside its grant, or widening a grant
 - Spending past a grant's budget
 - Secret values ending up in the prompt, events, artifacts or logs
-- Changes to the event log that `legion verify` misses (other than rewriting the whole chain from
-  the host)
+- Changes to the event log that `legion verify` misses, other than the known ones: cutting events
+  off the end, deleting a whole run, and rewriting or appending to a chain by someone who can
+  write the store (see docs/events.md)
+- A config file that loads differently from how it reads
 - Reusing an approval, or one approval being accepted for a different action
 - Resume or restart running something twice that may already have taken effect, resetting a
   budget, or skipping a check

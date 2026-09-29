@@ -15,8 +15,9 @@ structured output.
 - `AccessProvider` builds the auth headers from secret references.
 - `ModelResolver` maps an agent's requirement (a profile like `reasoning/high` plus needed
   features) to a configured binding, and refuses to start if none fits.
-- `provider_options` is keyed by provider kind. Each adapter reads its own key and can't overwrite
-  the core request fields with it.
+- Provider options (`models[].options` in `legion.yaml`, `provider_options` on the request) are
+  keyed by provider kind. Each adapter reads its own key and can't overwrite the core request
+  fields with it.
 - Reasoning blocks only go back to the provider that produced them.
 - Phase 1 ships OpenAI-compatible and Anthropic adapters, both on httpx.
 

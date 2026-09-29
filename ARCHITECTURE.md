@@ -1,8 +1,8 @@
 # Architecture
 
 Legion is a Python library with a CLI. It runs in one process on asyncio and stores its events in
-SQLite. The only external thing it talks to is the model endpoint. Parts marked with a phase
-aren't built yet; see [docs/roadmap.md](docs/roadmap.md).
+SQLite. The external things it talks to are the model endpoint and any MCP servers the operator
+configures (as subprocesses or over https). Parts marked with a phase aren't built yet; see [docs/roadmap.md](docs/roadmap.md).
 
 ## Layers
 
@@ -102,7 +102,18 @@ identity itself. Delegation is described below and in ADR 0016.
 Policy only runs for actions the grant already allows, and it can only say no. The built-in one is
 a list of rules matched on tool name, capability and effect class. Deny beats require-approval,
 which beats allow. OPA, Cedar, NIA or MIA could replace it behind the same interface. By default
-`external_irreversible` tools require approval.
+`external_irreversible` tools require approval; listing `policy.rules` in `legion.yaml` replaces
+that default, so keep an equivalent rule. A rule whose `tool` or `capability` matches nothing that
+exists is refused at startup, since it would read like a control and do nothing.
+
+## Configuration
+
+`legion.yaml` and agent files are trusted: whoever writes them can grant anything. The loader's
+job is to make sure they load the way they read. Unknown fields, a key given twice in the same
+mapping, YAML aliases, non-finite numbers and literal secrets are refused, and so is a tool
+setting that points at a directory containing the state directory, `legion.yaml`, a tool module
+or the agents directory (whether it exists yet or not). Paths are relative to `legion.yaml`;
+nothing expands `~` or `$VARS`.
 
 ## Approvals
 
@@ -127,9 +138,16 @@ the same state from storage and compares.
 
 Each event is hashed as `sha256(prev_hash + canonical_json(event without hash))`, starting from 64
 zeros per run. That's the same scheme MIA uses. SQLite triggers block `UPDATE` and `DELETE`.
+`legion verify` also checks that each body names its run and that the `seq` and `type` columns
+agree with it, and refuses bodies with a duplicated JSON key. `inspect` refuses to show a run whose
+chain doesn't verify.
 
-This catches edits, not a determined attacker who owns the host and can rewrite the whole chain.
-A forensics tool should treat these events as Legion's own account of what it did.
+The log is tamper-evident, not tamper-proof. The chain isn't keyed and there's no outside record
+of the last hash, so anyone who can write the store file (the same OS user, which includes native
+tools and MCP stdio servers) can drop the triggers, cut events off the end, delete a whole run,
+or rewrite a run's chain from the start, and `verify` won't notice. Cutting a run back to just
+after an approval makes resume run the approved call again. A forensics tool should treat these
+events as Legion's own account of what it did.
 
 Full list of events: [docs/events.md](docs/events.md).
 
@@ -139,12 +157,14 @@ These are three separate pieces:
 
 - `ModelProvider` speaks one wire format: OpenAI-compatible, Anthropic, or scripted for tests.
 - `AccessProvider` handles authentication. Right now that's none (local) or an API key. Gateways,
-  workload identity and OAuth (where the provider documents it) come in Phase 4.
+  workload identity and OAuth aren't built. A provider that gets an API key needs an https URL
+  (plain http only to localhost), and URLs can't carry a username or password.
 - `ModelResolver` maps what the agent asks for (e.g. `general/default` with tools) to a configured
   binding. If nothing fits, the run doesn't start. A binding's features are what the operator
   declares, limited to what the adapter implements.
 
-Provider-specific settings go in `provider_options[kind]`, and each adapter ignores the others.
+Provider-specific settings go in `models[].options` in `legion.yaml`, keyed by provider kind,
+and each adapter ignores the others.
 Reasoning blocks are passed back only to the provider that produced them.
 
 The adapters use httpx instead of vendor SDKs so that Legion is the only thing retrying, and
@@ -156,10 +176,17 @@ driving them isn't on the roadmap any more (ADR 0006).
 
 ## Secrets
 
-Config holds references like `env:ANTHROPIC_API_KEY`, never values. `Secret` wraps a value and
-won't print it. A tool gets only the credentials its spec lists. Every secret value resolved
-during a run is scrubbed (along with its JSON-escaped form) from every event before it's written,
-and from tool output before the model sees it.
+Config holds references like `env:ANTHROPIC_API_KEY`, never values, and a config error never
+repeats a value it rejected. `Secret` wraps a value and won't print it. A tool gets only the
+credentials its spec lists.
+
+When a run starts or resumes, Legion resolves every secret reference in the configuration it can:
+tool credentials, model API keys, and MCP servers' env and header values. Each value (and its
+JSON-escaped form) is scrubbed from every event before it's written, keys included, and from tool
+output before the model sees it; the longest value is replaced first. Provider error messages have
+the request's own headers removed before they become errors. What this doesn't catch: values
+under 4 characters, a secret a tool encodes or splits (base64, URL-encoding), a secret the model
+types out that Legion never resolved, and whatever an MCP server writes to its stderr log.
 
 ## Identity (NIA and MIA)
 
@@ -174,6 +201,7 @@ default `NullIdentityPort` never kills and never vetoes.
 | `credential(agent_ref, purpose)` | `POST /agents/{ref}/credentials` | token exchange |
 | `on_delegation(parent, child)` | register the child with a subset of grants | `mandates.delegate` |
 | `evidence(action_hash)` | incidents, audit | audit |
+| `credential_evidence(server)` | which credential an MCP server holds | - |
 
 An action runs only if both Legion's grant and the external service allow it. The kill check
 covers the task's own identity and every ancestor's, so killing an agent stops everything it
@@ -189,8 +217,8 @@ Each error has a disposition and the loop only looks at that:
   with backoff up to a limit, and each attempt is charged.
 - `recoverable`: unknown tool, bad arguments, denied, tool raised, repeated call. The model is told
   and can try something else.
-- `fatal`: budget exceeded, auth failure, context too long, loop, a write in doubt. The run ends.
-
+- `fatal`: budget exceeded, auth failure, context too long, loop. The run ends; anything still
+  running is recorded as in doubt.
 - `escalate`: approval needed, or an action is in doubt. The run pauses for a person.
 
 ## Resume
@@ -229,9 +257,10 @@ Details in ADR 0016.
 
 ## Tools
 
-Tool sources plug in behind one `Tool` protocol: native Python and MCP. A tool without
-an effect class and capabilities can't be registered. Names must match `[a-z][a-z0-9_]{0,63}`
-because that works with every provider.
+Tool sources plug in behind one `Tool` protocol: native Python and MCP. A tool without an effect
+class, or without capabilities unless it's `pure`, can't be registered. Names must match
+`[a-z][a-z0-9_]{0,63}` because that works with every provider. Tool and agent schemas can only use
+`$ref` inside themselves; Legion never fetches a schema from a URL or a file.
 
 The model only sees the tools the agent lists, and calling anything else gets refused. Native
 tools run inside the Legion process, so the checks decide whether a tool runs but not what its code
@@ -258,13 +287,20 @@ mcp_servers:
 
 That gives the tool `mcp_github_create_issue`, which needs `mcp.github.create_issue:<repo>`. At
 startup Legion connects, lists the server's tools and registers only manifest entries whose pin
-matches; before each call it checks the pin again. `legion mcp inspect github` shows the current
-pins, what the server claims about each tool, and the tools it offers that aren't used.
+matches; by default it checks the pin again before each call (`pin_check: discovery` turns that
+off). `legion mcp inspect github` shows the current pins, what the server claims about each tool,
+the tools it offers that aren't used, and a warning if the command runs a package with no version
+(`npx some-server`), since then the code can change without any pin changing. A bare command like
+`github-mcp-server` is found through `PATH`; the pin covers the name, not the binary.
 
-The model sees the server's description (cleaned and capped) unless the manifest replaces it.
-Results are reduced to text within size limits. The effect class and everything to do with
-authority come from the manifest. Each `action.proposed` for an MCP tool records where it ran and
-the credential scope the operator declared.
+The model sees the server's top-level description, cleaned of control and bidi characters and
+capped at 1000 characters, unless the manifest replaces it. Text inside the input schema
+(property descriptions, enums) goes to the model as the server wrote it; it's pinned, not
+cleaned. Results are reduced to text within size limits. The effect class and everything to do
+with authority come from the manifest. Each `action.proposed` for an MCP tool records where it
+ran and the credential scope the operator declared. Stdio servers run as the same OS user as
+Legion, so like native tools they can write the store; `cwd` is relative to `legion.yaml`, and
+their stderr goes to a log file readable only by that user.
 
 ## Multi-tenancy (not built)
 

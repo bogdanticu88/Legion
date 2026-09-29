@@ -36,7 +36,8 @@ What the child gets, field by field:
 | credentials | not in the grant; tools resolve their own, as always |
 
 The operator sets a ceiling on depth (`authority.max_delegation_depth`) and on tasks per run
-(`authority.max_tasks`). An agent's own `delegation` settings only apply when it is the root.
+(`authority.max_tasks`). A child's delegation limits are the smaller of its own agent's settings
+and what its parent allows (depth minus one, the parent's fan-out).
 
 The child starts with the objective and the `context` the parent passes, and nothing else: not
 the parent's conversation, instructions or results. When it ends, the parent gets a summary

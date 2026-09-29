@@ -17,5 +17,6 @@ step calls (policy, identity port, credential resolver), not the steps.
 ## Consequences
 
 - Reviewing enforcement means reading one function.
-- Tools get a `ToolContext` with their credentials and nothing else, so they can't call other tools
-  through Legion. They can still do anything Python can.
+- Tools get a `ToolContext` with their own credentials, the tool settings, ids and an idempotency
+  key, and no handle on the kernel, so they can't call other tools through Legion. They can still
+  do anything Python can.

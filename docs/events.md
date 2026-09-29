@@ -4,8 +4,21 @@ Schema version 1. Run status, the transcript and budget use are all rebuilt from
 (`legion.events.projections.RunState`). To read them from outside, use `legion inspect --json` or
 the `EventStore` interface.
 
-These are Legion's own record of what it did. Editing one breaks the chain, but someone who owns
-the host can rewrite the whole thing, so treat them as a claim to check against other sources.
+These are Legion's own record of what it did, and they're tamper-evident, not tamper-proof.
+
+| Change to a stored run | Caught by `legion verify`? |
+|---|---|
+| editing an event, or its hash | yes |
+| deleting, inserting or reordering events in the middle | yes |
+| moving events to another run, or changing the `seq`/`type` columns | yes |
+| a body with a duplicated JSON key | yes |
+| cutting events off the end | no |
+| deleting a whole run | only as "no run" |
+| rewriting a run's chain from the start, or appending correctly hashed events | no |
+
+The chain isn't keyed, so anything that can write the store file can do the last three. Treat
+the log as a claim to check against other sources, and keep a copy of each run's last hash
+somewhere else if that matters.
 
 ## Envelope
 
@@ -17,8 +30,8 @@ the host can rewrite the whole thing, so treat them as a claim to check against 
 | `seq` | starts at 1, no gaps within a run |
 | `ts` | UTC, when the event was created |
 | `type` | see below |
-| `task_id`, `agent_id`, `parent_task_id` | set on task events |
-| `correlation` | extra keys; `action_hash` on action and tool events once there's an Action |
+| `task_id`, `agent_id`, `parent_task_id` | set on every event emitted inside a task (task, model, action, tool, budget, approval) |
+| `correlation` | extra keys; `action_hash` on action and tool events once there's an Action, `approval_id` on approval events |
 | `payload` | depends on type |
 | `prev_hash` | previous event's `hash`, or 64 zeros for the first one |
 | `hash` | `sha256(prev_hash + canonical_json(everything except hash))` |
@@ -28,7 +41,8 @@ and decimals as strings.
 
 ## Ordering you can rely on
 
-- A run starts with `run.created`, `task.created`, `run.started`.
+- A run starts with `run.created`, `task.created`, `run.started`, written in one append, so a
+  crash leaves either all three or none.
 - While the run keeps going, each tool call from the model ends with one of `tool.completed`,
   `tool.failed` (with `will_retry: false`), `action.refused` or `action.reconciled`. If a fatal
   error ends the run in the middle of a call (loop, expired grant, missing credential, budget,
@@ -71,9 +85,9 @@ and decimals as strings.
 | `task.failed` | `error_code`, `message`, `disposition` | |
 | `task.cancelled` | `reason` | |
 | `model.requested` | `attempt`, `provider`, `model`, `message_count`, `tool_names`, `request_hash`, `max_output_tokens` | before each attempt. The request itself isn't stored since it comes from the transcript; the hash lets you compare two requests. Resume doesn't use it |
-| `model.responded` | `attempt`, `message`, `stop_reason`, `usage`, `cost_usd`, `latency_ms` | `message` is stored in full |
+| `model.responded` | `attempt`, `message`, `stop_reason`, `usage`, `cost_usd`, `latency_ms` | `message` is stored in full. `usage` has `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` |
 | `model.failed` | `attempt`, `error_code`, `message`, `disposition`, `will_retry`, `retry_in_ms` | |
-| `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope` and, if the identity service reported one, `credential_evidence` |
+| `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope` and, if the identity service reported one, `credential_evidence` (`source`, `subject`, `scopes`, `verified`) |
 | `action.refused` | `call_id`, `tool`, `action_hash`, `reason_code`, `message` | the model gets `message`. `action_hash` is null if the call was refused before it became an Action |
 | `action.repeated` | `call_id`, `tool`, `repeat_key`, `count` | third or later identical call |
 | `action.authorized` | `call_id`, `action_hash`, `reasons` | grant, policy and external check all passed |
@@ -104,14 +118,16 @@ and decimals as strings.
 
 Refusals: `unknown_tool`, `tool_not_offered`, `invalid_arguments`, `capability_denied`,
 `policy_denied`, `approval_denied`, `approval_expired`, `approval_mismatch`, `approval_reused`,
-`delegation_refused`, `repeated_action`.
+`delegation_refused`, `repeated_action`. A veto from the identity service is recorded as
+`policy_denied`, or `delegation_refused` when it vetoes a child.
 
 Pausing (`disposition: escalate`): `approval_required`, `action_in_doubt`.
 
 Fatal: `config_error`, `no_model_binding`, `budget_exceeded`, `deadline_exceeded`, `killed`,
 `loop_detected`, `credential_unavailable`, `grant_expired`, `abandoned`,
 `model_auth_error`, `model_request_rejected`, `context_exhausted`, `final_output_invalid`,
-`invalid_transition`, `concurrent_append`, `internal_error`.
+`invalid_transition`, `concurrent_append`, `internal_error`, `resume_refused` (for example a
+child whose model binding changed before a resume).
 
 Retried, then fatal if they keep happening: `model_timeout`, `model_unavailable`, `rate_limited`,
 `malformed_model_response`. A run that fails on one of these records `disposition: retryable`, which

@@ -2,7 +2,7 @@
 
 Legion is a harness for running agents with real permissions: every action goes through one
 checked path, authority only narrows, spending is capped, risky actions wait for a person, and a
-crash never makes an uncertain action run twice. The next phases build a host agent with
+crash doesn't make an uncertain write run twice. The next phases build a host agent with
 specialists on top of that, taking some ideas from Raven (see [assessment.md](assessment.md))
 without trying to be a harness of other harnesses.
 

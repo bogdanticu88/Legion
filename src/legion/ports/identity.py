@@ -1,4 +1,4 @@
-# Port to an external identity/authorization service (NIA or MIA). Adapters come in Phase 7;
+# Port to an external identity/authorization service (NIA or MIA). Adapters come in Phase 8;
 # see ARCHITECTURE.md for how the methods map onto each.
 
 from __future__ import annotations

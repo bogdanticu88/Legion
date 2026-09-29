@@ -43,8 +43,10 @@ charged when the run is resumed. Time spent paused doesn't count.
 
 ## Consequences
 
-- Legion does not claim exactly-once execution. It claims something narrower: it never
-  automatically repeats an action that may already have taken effect.
+- Legion does not claim exactly-once execution. It claims something narrower: from an intact
+  log, it never automatically repeats a `write` or `external_irreversible` call that may already
+  have taken effect. Calls declared `pure`, `read` or `write_idempotent` are run again, so a
+  wrong effect class breaks this, and so does a log cut back by someone who can write the store.
 - A response lost to a crash wasn't charged for tokens, and a tool that hung before a crash
   wasn't charged for the time it hung. Both are small and documented.
 - Some work gets charged twice (an interrupted model call, the step it was in). That errs toward

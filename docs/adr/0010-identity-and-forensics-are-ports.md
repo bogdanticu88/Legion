@@ -23,4 +23,4 @@ account.
 
 - A NIA adapter can also send tool calls through NIA's gateway, so getting around Legion doesn't
   get around NIA.
-- Phase 1 has the interface and a null implementation; adapters come in Phase 7.
+- Phase 1 has the interface and a null implementation; adapters come in Phase 8.

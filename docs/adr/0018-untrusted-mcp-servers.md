@@ -24,8 +24,8 @@ What an MCP server can do to a client like Legion:
 
 ### SDK
 
-The official Python SDK (`mcp` 2.x), as an optional extra (`legion[mcp]`), so a Legion without
-MCP doesn't pull it in. The SDK's own `MCPServer` is enough to build the hostile test servers.
+The official Python SDK (`mcp` 2.x), as the optional extra `mcp` (`uv sync --extra mcp`), so a
+Legion without MCP doesn't pull it in. The SDK's own `MCPServer` is enough to build the hostile test servers.
 
 FastMCP was the obvious alternative. It's built on the same SDK and mostly adds server-side
 features (composition, proxies, auth providers) and a client with its own conveniences. Legion
@@ -72,8 +72,9 @@ All of this happens in the normal pipeline before anything is sent to the server
 The server fingerprint is a digest of the server id, transport, command, cwd, url and the names
 of the env and header secret references. A tool's pin is a digest of the fingerprint and
 everything the server says about the tool: name, description, input and output schema,
-annotations. So changing a description, a schema, an annotation, the command, the url or which
-credential the server gets breaks every affected pin.
+annotations. So changing a description, a schema, an annotation, the command, the url or the
+names of the secret references the server gets breaks every affected pin. Changing the secret
+value behind a reference doesn't.
 
 Pins are checked at startup. By default (`pin_check: every_call`) the tool list is fetched again
 and the pin re-checked before every call. A tool whose pin no longer matches is blocked for the
@@ -84,12 +85,18 @@ much.
 
 The fingerprint describes how Legion reaches the server, not the code running there. A command
 like `npx some-server` that fetches the latest version can change behaviour without changing a
-pin. Pin versions in the command.
+pin. Pin versions in the command; `mcp inspect` warns when `npx`, `uvx` and similar runners are
+given a package without one. A bare command name is found through `PATH`, so the pin covers the
+name, not the binary.
 
 ### Descriptions and annotations
 
-Descriptions go to the model as tool descriptions, after control and bidi characters are removed
-and the text is cut to 1000 characters. The operator can replace one in the manifest. Annotations
+A tool's top-level description goes to the model after control and bidi characters are removed
+and the text is cut to 1000 characters. The operator can replace it in the manifest. Text inside
+the input schema (property descriptions, enums) goes to the model as the server wrote it: it's
+pinned, so it can't change after review, but it isn't cleaned. Schemas may only use `$ref`
+inside themselves; one that points at a URL or a file blocks the tool, and validation never
+retrieves anything. Annotations
 (`readOnlyHint` and the rest) are pinned and shown in `mcp inspect` as claims, and never used for
 anything. The effect class comes from the manifest only.
 
@@ -111,8 +118,11 @@ so every tool listing is fresh.
 - Anything that fails before the request goes out (can't connect, the pin check fails or times
   out) is a clean `ToolFailed`.
 - Anything that fails after it may have gone out (timeout, dropped connection, a response the SDK
-  rejects) is retryable for `pure` and `read` tools and in doubt for everything else. An in-doubt
-  call pauses the run for `legion reconcile`, the same as native writes (ADR 0013).
+  rejects) is retryable for `pure`, `read` and `write_idempotent` tools (up to the tool's
+  `max_attempts`, which defaults to 1 for MCP) and in doubt for `write` and
+  `external_irreversible`. An in-doubt call pauses the run for `legion reconcile`, the same as
+  native writes (ADR 0013). Legion doesn't send MCP servers an idempotency key, so
+  `write_idempotent` should only be used for a server that dedupes on its own.
 - Connecting and listing tools are bounded by `discovery_timeout_s` (10 s). A tool's `timeout_s`
   must be longer, so a stalled pin check can't look like a write that timed out.
 - A server that's unreachable at startup contributes no tools; an agent that needs them refuses
@@ -150,8 +160,10 @@ that reach it. Legion can't check that.
 Tools only. Resources and prompts aren't used: a prompt is server-written text meant for the
 model's instructions, and resources would need their own read capabilities and limits. Sampling,
 roots and logging are deprecated in the spec and not supported. Stdio server stderr goes to
-`.legion/mcp/<server>.stderr.log` instead of the operator's terminal. Remote `http` servers
-need `https`; plain `http` is allowed only for localhost.
+`.legion/mcp/<server>.stderr.log` (mode 0600, not scrubbed) instead of the operator's terminal.
+Remote `http` servers need `https`; plain `http` is allowed only for localhost, and URLs can't
+carry a username or password. A stdio server's `cwd` is relative to `legion.yaml`, and its
+env and header secrets are scrubbed from events and tool output like any other secret.
 
 ## Consequences
 

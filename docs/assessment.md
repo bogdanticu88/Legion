@@ -46,7 +46,7 @@ What I'm taking from it: the host agent with specialists, planning as something 
 shipping useful built-in agents. What I'm leaving alone: driving other harnesses, and a harness
 that rewrites itself. Legion's angle is the part Raven is thinnest on: a positive grant that only
 narrows, one checked path for every action, enforced budgets, approvals bound to one call, and
-recovery that never repeats an uncertain action.
+recovery that doesn't repeat an uncertain write on its own.
 
 ## Problems I kept seeing
 

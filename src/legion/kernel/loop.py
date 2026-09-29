@@ -53,7 +53,7 @@ class AgentLoop:
             return False
         if view.awaiting_finish:
             return await self._finish(task, message.text, view.last_stop)
-        # sequential for now; parallel calls come with the Phase 3 scheduler
+        # sequential for now; running calls concurrently is roadmap phase 3b
         for call in message.tool_calls:
             if call.id in view.ended:
                 continue

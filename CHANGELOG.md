@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Review before Phase 5
+
+- Schemas can't reach outside themselves. jsonschema used to follow a `$ref` to a URL or a
+  `file://` path, so a server-written tool schema could make Legion send a request or read a
+  local file into an error message. Validation now never retrieves anything, and tool and agent
+  schemas with an outside `$ref` are refused.
+- Secret scrubbing covers every secret the configuration references (tool credentials, model API
+  keys, MCP env and headers) from the start of a run and after a resume, dictionary keys
+  included, longest value first. Provider errors no longer carry the request's auth header.
+- `legion.yaml` and agent files: repeated keys, YAML aliases, non-finite numbers, bad store paths
+  and trailing newlines in names are refused; policy rules that match no tool or capability are
+  refused; provider URLs are checked like MCP URLs and can't carry credentials; config errors
+  don't repeat rejected secrets; the tool-setting check also covers paths that don't exist yet,
+  `legion.yaml`, tool modules and the agents directory. Granted patterns can't contain `..`.
+- MCP: `cwd` is relative to `legion.yaml`, stdio/http leftovers are refused, the stderr log is
+  mode 0600, `mcp inspect` warns about `npx`/`uvx` packages without a version, and the missing-SDK
+  error no longer points at the unrelated `legion` package on PyPI.
+- Events: `verify` checks run ids, the `seq` and `type` columns and duplicated JSON keys;
+  `inspect` refuses a broken chain; `approvals` says which runs it left out. A run's first three
+  events are one append, and a crash between asking for approval and pausing is recorded as a
+  pause on resume.
+- CI has a job without the `mcp` extra. `uv run pytest -m demo` runs five demonstrations
+  (docs/demos.md).
+- Docs corrected where they claimed more than the code does: scrubbing, retries of
+  `write_idempotent` MCP tools, what pins cover, what resume re-runs, and what the hash chain
+  detects.
+
 ### Phase 4
 
 - MCP tools through the official Python SDK, as the optional extra `mcp`. Servers and the tools

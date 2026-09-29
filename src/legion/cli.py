@@ -70,7 +70,7 @@ def _load(path: Path) -> Loaded:
 def init(
     directory: Annotated[Path, typer.Argument(help="Where to create the project.")] = Path("."),
 ) -> None:
-    """Create legion.yaml, an example agent, a tool module and a model script."""
+    """Create a starter project: legion.yaml, three agents, a tool module, model scripts, notes."""
     created = write_project(directory)
     if not created:
         err.print("nothing written: files already exist")
