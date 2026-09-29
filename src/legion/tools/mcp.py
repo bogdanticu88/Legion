@@ -26,7 +26,7 @@ from legion.domain.action import EffectClass
 from legion.domain.errors import ActionInDoubt, ConfigError, ToolFailed, ToolRetryable
 from legion.tools.base import TOOL_NAME, ToolContext, ToolResult, ToolSpec, resource_from_argument
 
-_SERVER_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_SERVER_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 _UNSAFE_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 DESCRIPTION_LIMIT = 1_000
 _LOOPBACK = ("localhost", "127.0.0.1", "::1")

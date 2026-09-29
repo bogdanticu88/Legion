@@ -18,8 +18,8 @@ from legion.domain.budget import BudgetLimits
 from legion.domain.capability import Capability
 from legion.domain.grant import DelegationLimits
 
-_AGENT_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-_PROFILE = re.compile(r"^[a-z0-9_-]+(/[a-z0-9_-]+)*$")
+_AGENT_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}\Z")
+_PROFILE = re.compile(r"^[a-z0-9_-]+(/[a-z0-9_-]+)*\Z")
 
 
 class ModelFeature(StrEnum):

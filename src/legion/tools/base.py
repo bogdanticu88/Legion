@@ -15,7 +15,7 @@ from legion.domain.action import EffectClass
 from legion.domain.capability import Capability
 from legion.domain.errors import InvalidArguments
 
-TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}\Z")
 
 
 class ToolSpec(BaseModel):

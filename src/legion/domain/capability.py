@@ -9,7 +9,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-_NAME = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*(\.\*)?$")
+_NAME = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*(\.\*)?\Z")
 
 
 class Capability(BaseModel):

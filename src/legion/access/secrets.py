@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from legion.domain.errors import ConfigError, CredentialUnavailable
 
-_REF = re.compile(r"^(env):([A-Za-z_][A-Za-z0-9_]*)$")
+_REF = re.compile(r"^(env):([A-Za-z_][A-Za-z0-9_]*)\Z")
 
 
 class SecretRef(BaseModel):
