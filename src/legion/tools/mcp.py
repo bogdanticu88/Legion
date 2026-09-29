@@ -27,7 +27,9 @@ from legion.domain.errors import ActionInDoubt, ConfigError, ToolFailed, ToolRet
 from legion.tools.base import TOOL_NAME, ToolContext, ToolResult, ToolSpec, resource_from_argument
 
 _SERVER_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
-_UNSAFE_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_UNSAFE_CHARS = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]"
+)
 DESCRIPTION_LIMIT = 1_000
 
 

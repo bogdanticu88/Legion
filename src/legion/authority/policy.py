@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from legion.domain.action import Action, EffectClass
 from legion.domain.grant import Grant
+from legion.ports.credentials import Assurance
 
 
 class Verdict(StrEnum):
@@ -21,6 +22,8 @@ class Verdict(StrEnum):
 class Decision:
     verdict: Verdict
     reasons: tuple[str, ...] = ()
+    # the least assurance a credential for this call must have (ADR 0019)
+    credential_minimum: Assurance | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,9 @@ class Rule(BaseModel):
     capability: str | None = None
     effect: EffectClass | None = None
     reason: str | None = None
+    # Raises the credential assurance a matching call needs, whatever the decision. Several
+    # matching rules: the highest wins. It never lowers anything.
+    credential_assurance: Assurance | None = None
 
     def matches(self, action: Action) -> bool:
         if self.tool is not None and not fnmatchcase(action.tool, self.tool):
@@ -79,11 +85,13 @@ class RuleTablePolicy:
 
     async def evaluate(self, action: Action, context: PolicyContext) -> Decision:
         matched = [r for r in self.rules if r.matches(action)]
+        required = [r.credential_assurance for r in matched if r.credential_assurance]
+        minimum = max(required, key=lambda a: a.rank) if required else None
         for verdict in _PRECEDENCE:
             hits = [r for r in matched if r.decision is verdict]
             if hits:
-                return Decision(verdict, tuple(r.describe() for r in hits))
-        return Decision(self.default, (f"default {self.default.value}",))
+                return Decision(verdict, tuple(r.describe() for r in hits), minimum)
+        return Decision(self.default, (f"default {self.default.value}",), minimum)
 
 
 def default_rules() -> list[Rule]:

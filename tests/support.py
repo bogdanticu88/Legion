@@ -156,6 +156,7 @@ def build(
     scripts: dict[str, Sequence[Step]] | None = None,
     max_tasks: int = 16,
     max_delegation_depth: int = 2,
+    options: dict[str, Any] | None = None,
 ) -> Harness:
     args = dict(locals())
     files = files or Files({"docs/a.md": "alpha", "secret/b.md": "beta"})
@@ -196,6 +197,7 @@ def build(
         agents=agents,
         max_tasks=max_tasks,
         max_delegation_depth=max_delegation_depth,
+        **(options or {}),
     )
 
     def rebuild(**changes: Any) -> Harness:

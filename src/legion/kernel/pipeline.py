@@ -1,17 +1,18 @@
 # Every tool call goes through ActionPipeline.execute, in this order:
 #   kill check, lookup, schema + resource, repeat check, grant, policy, external authority,
-#   approval (if policy asks for one), credentials, budget, run (timeout, retries), output check,
-#   redaction. A resumed run goes through exactly the same steps.
+#   approval (if policy asks for one), budget, kill check again, credentials (issued, then
+#   checked against the Action), run (timeout, retries), output check, redaction. A resumed run
+#   goes through exactly the same steps. See ADR 0019 for why credentials come after budget.
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
 from legion import schemas
-from legion.access.secrets import Secret
 from legion.authority.policy import PolicyContext, Verdict
 from legion.canonical import canonical_json
 from legion.domain.action import Action
@@ -27,6 +28,7 @@ from legion.domain.errors import (
     ApprovalReused,
     BudgetExceeded,
     CapabilityDenied,
+    CredentialRefused,
     CredentialUnavailable,
     Disposition,
     GrantExpired,
@@ -45,8 +47,10 @@ from legion.domain.messages import ToolCallPart
 from legion.events import types as ev
 from legion.events.types import EventType
 from legion.kernel import approvals
+from legion.kernel.credentials import EXPIRED, WIDER, Obtained, clean, ref_digest
 from legion.kernel.delegation import ChildPlan, DelegateTool, DelegationRefused
 from legion.kernel.services import Kernel, TaskRuntime, redact_text
+from legion.ports.credentials import Assurance
 from legion.tools.base import Tool, ToolContext, ToolResult
 
 REPEAT_REFUSE_AT = 3
@@ -112,15 +116,14 @@ class ActionPipeline:
                 action,
             )
 
-        refusal, plan = await self._authorize(call, action, task, tool)
+        refusal, plan, minimum = await self._authorize(call, action, task, tool)
         if refusal is not None:
             return await self._refuse(task, call, refusal, action)
 
         if plan is not None:
             await self._delegate(tool, call, action, task, plan)
             return None
-        secrets = await self._credentials(tool)
-        await self._run(tool, call, action, task, secrets)
+        await self._run(tool, call, action, task, minimum)
         return None
 
     async def _remote(self, tool: Tool) -> dict[str, Any] | None:
@@ -130,13 +133,18 @@ class ActionPipeline:
         if origin is None:
             return None
         remote: dict[str, Any] = dict(origin)
+        # An MCP server holds one credential for the whole process, not one per call, so the
+        # best it can be is what the operator declared about it.
+        remote["credential_assurance"] = (
+            Assurance.DECLARED if origin.get("credential_scope") else Assurance.UNVERIFIED
+        ).value
         evidence = await self.k.identity.credential_evidence(origin.get("server", ""))
         if evidence is not None:
             remote["credential_evidence"] = {
                 "source": evidence.source,
                 "subject": evidence.subject,
                 "scopes": list(evidence.scopes),
-                "verified": evidence.verified,
+                "claimed_verified": evidence.claimed_verified,
             }
         return remote
 
@@ -173,37 +181,41 @@ class ActionPipeline:
 
     async def _authorize(
         self, call: ToolCallPart, action: Action, task: TaskRuntime, tool: Tool
-    ) -> tuple[ActionRefused | None, ChildPlan | None]:
+    ) -> tuple[ActionRefused | None, ChildPlan | None, Assurance | None]:
         if task.grant.expired(self.k.now()):
             raise GrantExpired(f"grant {task.grant.id} has expired")
         missing = [str(c) for c in action.required if not task.grant.covers(c)]
         if missing:
-            return CapabilityDenied(f"the task's grant does not cover {', '.join(missing)}"), None
+            return (
+                CapabilityDenied(f"the task's grant does not cover {', '.join(missing)}"),
+                None,
+                None,
+            )
 
         decision = await self.k.policy.evaluate(
             action, PolicyContext(grant=task.grant, agent=task.agent.name, task_id=task.task_id)
         )
         if decision.verdict is Verdict.DENY:
-            return PolicyDenied("; ".join(decision.reasons) or "denied by policy"), None
+            return PolicyDenied("; ".join(decision.reasons) or "denied by policy"), None, None
 
         external = await self.k.identity.authorize(action, task.identity)
         if not external.allowed:
-            return PolicyDenied(f"{external.source}: {external.reason or 'denied'}"), None
+            return PolicyDenied(f"{external.source}: {external.reason or 'denied'}"), None, None
 
         plan = None
         if isinstance(tool, DelegateTool):
             if self.k.delegator is None:
-                return DelegationRefused("delegation isn't set up for this run"), None
+                return DelegationRefused("delegation isn't set up for this run"), None, None
             planned = self.k.delegator.plan(call, task)
             if isinstance(planned, ActionRefused):
-                return planned, None
+                return planned, None, None
             plan = planned
 
         # Only ask a human once everything else has said yes.
         if decision.verdict is Verdict.REQUIRE_APPROVAL:
             refusal = await self._approval(call, action, task, tool)
             if refusal is not None:
-                return refusal, None
+                return refusal, None, None
 
         await self.k.emit(
             task,
@@ -215,7 +227,7 @@ class ActionPipeline:
             ),
             correlation={"action_hash": action.hash},
         )
-        return None, plan
+        return None, plan, decision.credential_minimum
 
     async def _delegate(
         self, tool: Tool, call: ToolCallPart, action: Action, task: TaskRuntime, plan: ChildPlan
@@ -251,7 +263,7 @@ class ActionPipeline:
         )
         started = time.monotonic()
         result = await self.k.delegator.run(call, task, plan)
-        await self._complete(tool, task, call, action, result, {}, started, 1)
+        await self._complete(tool, task, call, action, result, started, 1)
 
     async def _approval(
         self, call: ToolCallPart, action: Action, task: TaskRuntime, tool: Tool
@@ -263,7 +275,7 @@ class ActionPipeline:
             action=action,
             tool=tool.spec,
             settings=self.k.settings,
-            credential_refs={k: str(v) for k, v in self.k.credential_bindings.items()},
+            credential_refs=self.k.broker.describe(),
         )
         expected = approvals.binding_hash(bound)
         now = self.k.now()
@@ -342,18 +354,166 @@ class ActionPipeline:
         )
         return None
 
-    async def _credentials(self, tool: Tool) -> dict[str, Secret]:
-        out = {}
+    async def _credentials(
+        self,
+        tool: Tool,
+        call: ToolCallPart,
+        action: Action,
+        task: TaskRuntime,
+        minimum: Assurance | None,
+        held: dict[str, Obtained],
+    ) -> bool:
+        """Before each attempt: make sure `held` has a usable credential for every name the tool
+        needs, then check everything once more just before dispatch. False means the call was
+        refused.
+
+        A credential held from an earlier attempt of this same call is reused while it's in its
+        lifetime and the authority says it's active. An expired one is replaced, going through
+        every check again. One the authority says is no longer active, or can't vouch for, is
+        not replaced: that would go around the authority.
+        """
+        if not await self._server_credential(tool, call, action, task, minimum, held):
+            return False
         for name in tool.spec.credentials:
-            ref = self.k.credential_bindings.get(name)
-            if ref is None:
+            if name not in self.k.broker.static and name not in self.k.broker.mapped:
                 raise CredentialUnavailable(
                     f"tool {tool.spec.name} needs credential {name!r}, which is not configured"
                 )
-            secret = await self.k.credentials.resolve(ref)
-            self.k.recorder.remember(secret.reveal())
-            out[name] = secret
-        return out
+        # Two rounds at most: a credential that expires between being issued and the call
+        # starting is replaced once, since nothing has been sent. Twice, and the call doesn't run.
+        expired: list[Obtained] = []
+        for _ in range(2):
+            # nothing is issued for an agent that's been killed, in either round
+            await self._still_alive(task, held)
+            for name in tool.spec.credentials:
+                if name in held:
+                    continue
+                got = await self.k.broker.obtain(
+                    name,
+                    action,
+                    task.grant,
+                    run_id=task.run_id,
+                    call_id=call.id,
+                    seen=set(self.k.state.credential_refs),
+                    now=self.k.now(),
+                    # before anything else is done with it, so it can't reach the log or the model
+                    remember=self.k.recorder.remember,
+                    at_least=minimum,
+                )
+                self.k.faults("credential:obtained")
+                if got.secret is None:
+                    return await self._credential_refused(tool, call, action, task, got, held)
+                await self.k.emit(
+                    task,
+                    EventType.CREDENTIAL_RESOLVED,
+                    _credential_payload(call, action, task, got, self.k.recorder.redact),
+                    {"action_hash": action.hash},
+                )
+                held[name] = got
+            # the last look at each credential before dispatch
+            expired = []
+            for name, got in list(held.items()):
+                problem = await self.k.broker.check(got, self.k.now())
+                if problem == EXPIRED:
+                    expired.append(held.pop(name))
+                elif problem is not None:
+                    got.problems = (*got.problems, problem)
+                    return await self._credential_refused(tool, call, action, task, got, held)
+            if not expired:
+                break
+        if expired:
+            late = expired[0]
+            late.problems = (*late.problems, "expired again before the call started")
+            return await self._credential_refused(tool, call, action, task, late, held)
+        self.k.faults("credential:checked")
+        # And the identity, once more, now that the credentials exist. What Legion can promise is
+        # that it looked immediately before dispatch, not that nothing changes after (ADR 0019).
+        await self._still_alive(task, held)
+        return True
+
+    async def _still_alive(self, task: TaskRuntime, held: dict[str, Obtained]) -> None:
+        try:
+            await self.k.check_kill(task)
+        except BaseException:
+            for got in held.values():
+                await self.k.broker.revoke(got)
+            raise
+
+    async def _server_credential(
+        self,
+        tool: Tool,
+        call: ToolCallPart,
+        action: Action,
+        task: TaskRuntime,
+        minimum: Assurance | None,
+        held: dict[str, Obtained],
+    ) -> bool:
+        # An MCP server holds its own credential for the whole process. Legion can't issue or
+        # check it, so it counts as declared (the operator wrote a scope) or unverified, and a
+        # call needing more doesn't reach the server.
+        origin = tool.spec.origin
+        if origin is None or origin.get("kind") != "mcp":
+            return True
+        have = Assurance.DECLARED if origin.get("credential_scope") else Assurance.UNVERIFIED
+        need = self.k.broker.minimum
+        if minimum is not None and minimum.rank > need.rank:
+            need = minimum
+        if have.rank >= need.rank:
+            return True
+        got = Obtained(
+            name=f"mcp server {origin.get('server')}",
+            authority="server",
+            assurance=have,
+            required=need,
+            problems=(f"an MCP server's own credential is at most {have}; {need} is required",),
+        )
+        return await self._credential_refused(tool, call, action, task, got, held)
+
+    async def _credential_refused(
+        self,
+        tool: Tool,
+        call: ToolCallPart,
+        action: Action,
+        task: TaskRuntime,
+        got: Obtained,
+        held: dict[str, Obtained],
+    ) -> bool:
+        # A refused credential's secret is scrubbed too: an authority can put it in the evidence.
+        if got.issued is not None:
+            self.k.recorder.remember(got.issued.reveal())
+        for issued in (*held.values(), got):
+            await self.k.broker.revoke(issued)
+        held.clear()
+        correlation = {"action_hash": action.hash}
+        # The model gets the reason code only; the details can hold text the authority chose, so
+        # they stay in the log. Both events go in one append: a crash between them would leave a
+        # refused call that resume could still run under its approval.
+        refusal = CredentialRefused(
+            f"no acceptable credential for {tool.spec.name}; this call can't run"
+        )
+        await self.k.recorder.append(
+            [
+                self.k.draft(
+                    task,
+                    EventType.CREDENTIAL_REFUSED,
+                    _credential_payload(call, action, task, got, self.k.recorder.redact),
+                    correlation,
+                ),
+                self.k.draft(
+                    task,
+                    EventType.ACTION_REFUSED,
+                    ev.ActionRefused(
+                        call_id=call.id,
+                        tool=call.name,
+                        action_hash=action.hash,
+                        reason_code=refusal.code,
+                        message=refusal.message,
+                    ),
+                    correlation,
+                ),
+            ]
+        )
+        return False
 
     async def _run(
         self,
@@ -361,19 +521,12 @@ class ActionPipeline:
         call: ToolCallPart,
         action: Action,
         task: TaskRuntime,
-        secrets: dict[str, Secret],
+        minimum: Assurance | None = None,
     ) -> None:
         spec = tool.spec
         ledger = self.k.ledger(task)
-        context = ToolContext(
-            task_id=task.task_id,
-            agent=task.agent.name,
-            call_id=call.id,
-            credentials=secrets,
-            settings=self.k.settings,
-            # same value on every retry and after a resume, so an idempotent API can dedupe
-            idempotency_key=action.hash,
-        )
+        # this call's credentials, kept across its retries and checked before each attempt
+        held: dict[str, Obtained] = {}
         correlation = {"action_hash": action.hash}
         attempt = 0
         while True:
@@ -386,6 +539,19 @@ class ActionPipeline:
             record, _ = ledger.charge(Dimension.TOOL_CALLS, 1)
             await self.k.emit(task, EventType.BUDGET_CONSUMED, record)
             await self.k.check_kill(task)
+            # Only now, when the attempt is paid for and nothing has been killed: a credential
+            # minted for a call that can't run is authority handed out for nothing.
+            if not await self._credentials(tool, call, action, task, minimum, held):
+                return
+            context = ToolContext(
+                task_id=task.task_id,
+                agent=task.agent.name,
+                call_id=call.id,
+                credentials={n: g.secret for n, g in held.items() if g.secret is not None},
+                settings=self.k.settings,
+                # same value on every retry and after a resume, so an idempotent API can dedupe
+                idempotency_key=action.hash,
+            )
             await self.k.emit(
                 task,
                 EventType.TOOL_STARTED,
@@ -459,7 +625,7 @@ class ActionPipeline:
                 return
 
             assert result is not None
-            await self._complete(tool, task, call, action, result, secrets, started, attempt)
+            await self._complete(tool, task, call, action, result, started, attempt)
             return
 
     async def _complete(
@@ -469,7 +635,6 @@ class ActionPipeline:
         call: ToolCallPart,
         action: Action,
         result: ToolResult,
-        secrets: dict[str, Secret],
         started: float,
         attempt: int,
     ) -> None:
@@ -548,4 +713,47 @@ def exceeded_payload(task: TaskRuntime, exc: BudgetExceeded) -> ev.BudgetExceede
         dimension=exc.dimension,
         limit=Decimal(str(exc.limit)),
         attempted=Decimal(str(exc.attempted)),
+    )
+
+
+def _credential_payload(
+    call: ToolCallPart,
+    action: Action,
+    task: TaskRuntime,
+    got: Obtained,
+    redact: Callable[[str], str],
+) -> ev.CredentialUse:
+    evidence = got.evidence
+    request = got.request
+    identity = task.grant.identity
+
+    def text(value: str) -> str:
+        # scrub first, then shorten: a shortened secret no longer matches the scrubber
+        return clean(redact(value))
+
+    return ev.CredentialUse(
+        call_id=call.id,
+        action_hash=action.hash,
+        name=got.name,
+        authority=text(got.authority),
+        assurance=got.assurance.value if got.assurance is not None else None,
+        required=got.required.value,
+        principal=str(identity.principal),
+        subject=identity.agent_ref,
+        grant_id=task.grant.id,
+        grant_fingerprint=request.grant_fingerprint if request else None,
+        provider=request.provider if request else None,
+        requested_permissions=list(request.permissions) if request else [],
+        requested_resource=request.resource if request else None,
+        permissions=[text(p) for p in evidence.permissions] if evidence else [],
+        resource=text(evidence.resource) if evidence and evidence.resource else None,
+        credential_ref=text(got.ref) if got.ref else None,
+        credential_ref_digest=ref_digest(task.run_id, got.ref) if got.ref else None,
+        revocation_ref=text(evidence.revocation_ref)
+        if evidence and evidence.revocation_ref
+        else None,
+        issued_at=evidence.issued_at.isoformat() if evidence else None,
+        expires_at=evidence.expires_at.isoformat() if evidence else None,
+        widened=any(p.startswith(WIDER) or "is wider than" in p for p in got.problems),
+        problems=[text(p) for p in got.problems],
     )

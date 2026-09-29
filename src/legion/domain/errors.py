@@ -100,6 +100,11 @@ class CapabilityDenied(ActionRefused):
     code = "capability_denied"
 
 
+class CredentialRefused(ActionRefused):
+    # the credential for an authorized call was missing, too weak, or not what was asked for
+    code = "credential_refused"
+
+
 class PolicyDenied(ActionRefused):
     code = "policy_denied"
 

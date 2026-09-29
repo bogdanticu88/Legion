@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 from datetime import timedelta
 from fnmatch import fnmatchcase
@@ -18,6 +19,7 @@ from legion.domain.agent import AgentSpec
 from legion.domain.capability import Capability
 from legion.domain.errors import ConfigError
 from legion.events.sqlite_store import SqliteEventStore
+from legion.kernel.credentials import CredentialMapping
 from legion.kernel.locks import FileRunLocks
 from legion.kernel.runtime import Legion
 from legion.kernel.services import RetryPolicy
@@ -26,6 +28,7 @@ from legion.models.base import ModelProvider
 from legion.models.openai_compat import OpenAICompatProvider
 from legion.models.resolver import ModelBinding, ModelResolver
 from legion.models.scripted import ScriptedProvider
+from legion.ports.credentials import Assurance, CredentialAuthority
 from legion.tools.mcp import (
     Connection,
     McpServerConfig,
@@ -97,6 +100,19 @@ class ApprovalConfig(_Strict):
     ttl_seconds: int = Field(default=3600, gt=0, le=7 * 24 * 3600)
 
 
+class CredentialAuthorityConfig(_Strict):
+    # a Python file defining AUTHORITY; trusted code, like a tool module
+    module: str
+    # only a trusted authority's evidence can make a credential verified or bound
+    trusted: bool = False
+
+
+class CredentialPolicy(_Strict):
+    # the least assurance any credential may have; a mapping can ask for more
+    minimum: Assurance = Assurance.UNVERIFIED
+    timeout_s: float = Field(default=10.0, gt=0, le=120)
+
+
 class LegionConfig(_Strict):
     version: Literal[1]
     store: str = ".legion/legion.db"
@@ -109,7 +125,10 @@ class LegionConfig(_Strict):
     models: list[ModelBinding]
     authority: AuthorityConfig = AuthorityConfig()
     policy: PolicyConfig = PolicyConfig()
-    credentials: dict[str, str] = Field(default_factory=dict)
+    # name -> env:NAME (static, unverified) or a mapping onto a credential authority
+    credentials: dict[str, str | CredentialMapping] = Field(default_factory=dict)
+    credential_authorities: dict[str, CredentialAuthorityConfig] = Field(default_factory=dict)
+    credential_policy: CredentialPolicy = CredentialPolicy()
     retry: RetryConfig = RetryConfig()
     approvals: ApprovalConfig = ApprovalConfig()
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
@@ -123,10 +142,23 @@ class LegionConfig(_Strict):
 
     @field_validator("credentials")
     @classmethod
-    def _refs(cls, value: dict[str, str]) -> dict[str, str]:
+    def _refs(cls, value: dict[str, str | CredentialMapping]) -> dict[str, str | CredentialMapping]:
         for ref in value.values():
-            SecretRef.parse(ref)
+            if isinstance(ref, str):
+                SecretRef.parse(ref)
         return value
+
+    @model_validator(mode="after")
+    def _authorities(self) -> LegionConfig:
+        for name, cred in self.credentials.items():
+            if (
+                isinstance(cred, CredentialMapping)
+                and cred.authority not in self.credential_authorities
+            ):
+                raise ValueError(
+                    f"credential {name} uses authority {cred.authority!r}, not configured"
+                )
+        return self
 
 
 @dataclass
@@ -160,6 +192,10 @@ class Loaded:
             "the state directory": self.resolve_path(self.config.store).parent,
             "legion.yaml": self.path,
             **{f"tool module {m}": self.resolve_path(m) for m in self.config.tool_modules},
+            **{
+                f"credential authority module {a.module}": self.resolve_path(a.module)
+                for a in self.config.credential_authorities.values()
+            },
         }
         if self.config.agents_dir is not None:
             protected["the agents directory"] = self.resolve_path(self.config.agents_dir)
@@ -189,7 +225,23 @@ class Loaded:
             policy=RuleTablePolicy(self.config.policy.rules, self.config.policy.default),
             grantable=[Capability.parse(c) for c in self.config.authority.grantable],
             credentials=env,
-            credential_bindings={k: SecretRef.parse(v) for k, v in self.config.credentials.items()},
+            credential_bindings={
+                k: SecretRef.parse(v)
+                for k, v in self.config.credentials.items()
+                if isinstance(v, str)
+            },
+            credential_mappings={
+                k: v for k, v in self.config.credentials.items() if isinstance(v, CredentialMapping)
+            },
+            credential_authorities={
+                name: load_authority_module(self.resolve_path(cfg.module), name)
+                for name, cfg in self.config.credential_authorities.items()
+            },
+            trusted_authorities=[
+                name for name, cfg in self.config.credential_authorities.items() if cfg.trusted
+            ],
+            credential_minimum=self.config.credential_policy.minimum,
+            credential_timeout_s=self.config.credential_policy.timeout_s,
             secret_refs=[
                 SecretRef.parse(p.access.secret)
                 for p in self.config.providers.values()
@@ -376,3 +428,22 @@ def load_agent(path: Path) -> AgentSpec:
         return AgentSpec.model_validate(raw)
     except ValidationError as exc:
         raise _explain(path, exc) from exc
+
+
+def load_authority_module(path: Path, name: str) -> CredentialAuthority:
+    # Runs the file, like a tool module: it's operator code.
+    if not path.is_file():
+        raise ConfigError(f"credential authority module not found: {path}")
+    spec = importlib.util.spec_from_file_location(f"legion_authority_{name}", path)
+    if spec is None or spec.loader is None:
+        raise ConfigError(f"cannot import credential authority module {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    authority = getattr(module, "AUTHORITY", None)
+    if authority is None or not callable(getattr(authority, "issue", None)):
+        raise ConfigError(f"{path} must define AUTHORITY with an issue() method")
+    if getattr(authority, "name", None) != name:
+        raise ConfigError(
+            f"{path} defines authority {getattr(authority, 'name', None)!r}, not {name!r}"
+        )
+    return authority  # type: ignore[no-any-return]

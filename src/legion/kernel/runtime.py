@@ -39,6 +39,7 @@ from legion.events.projections import RunState, TaskView
 from legion.events.sqlite_store import SqliteEventStore
 from legion.events.store import EventStore
 from legion.events.types import EventDraft, EventType
+from legion.kernel.credentials import CredentialBroker, CredentialMapping
 from legion.kernel.delegation import DELEGATE, DelegateTool, Delegator
 from legion.kernel.locks import FileRunLocks, InProcessRunLocks, RunLocks
 from legion.kernel.loop import AgentLoop
@@ -53,6 +54,7 @@ from legion.kernel.services import (
     no_faults,
 )
 from legion.models.resolver import ModelResolver
+from legion.ports.credentials import Assurance, CredentialAuthority
 from legion.ports.identity import IdentityPort, NullIdentityPort
 from legion.tools.registry import ToolRegistry
 
@@ -105,6 +107,11 @@ class Legion:
         identity: IdentityPort | None = None,
         credentials: CredentialResolver | None = None,
         credential_bindings: Mapping[str, SecretRef] | None = None,
+        credential_mappings: Mapping[str, CredentialMapping] | None = None,
+        credential_authorities: Mapping[str, CredentialAuthority] | None = None,
+        trusted_authorities: Sequence[str] = (),
+        credential_minimum: Assurance = Assurance.UNVERIFIED,
+        credential_timeout_s: float = 10.0,
         secret_refs: Sequence[SecretRef] = (),
         artifacts: ArtifactStore | None = None,
         settings: Mapping[str, str] | None = None,
@@ -127,6 +134,15 @@ class Legion:
         self.identity = identity or NullIdentityPort()
         self.credentials = credentials or EnvResolver()
         self.credential_bindings = dict(credential_bindings or {})
+        self.broker = CredentialBroker(
+            resolver=self.credentials,
+            static=self.credential_bindings,
+            mapped=credential_mappings,
+            authorities=credential_authorities,
+            trusted=frozenset(trusted_authorities),
+            minimum=credential_minimum,
+            timeout_s=credential_timeout_s,
+        )
         self.secret_refs = list(secret_refs)
         self.artifacts = artifacts or MemoryArtifactStore()
         self.settings = dict(settings or {})
@@ -206,7 +222,7 @@ class Legion:
             policy=self.policy,
             identity=self.identity,
             credentials=self.credentials,
-            credential_bindings=self.credential_bindings,
+            broker=self.broker,
             artifacts=self.artifacts,
             settings=self.settings,
             retry=self.retry,

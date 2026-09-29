@@ -144,6 +144,9 @@ class RunState:
     # (parent grant, child task, dimension) -> amount still held for that child
     reservations: dict[tuple[str, str, str], Decimal] = field(default_factory=dict)
     approvals: dict[str, ApprovalView] = field(default_factory=dict)
+    # digests of every credential reference an authority has handed out in this run; a repeat
+    # is refused
+    credential_refs: set[str] = field(default_factory=set)
     paused: Paused | None = None
     # start of the current active stretch, for wall-clock accounting across pauses and crashes
     active_since: datetime | None = None
@@ -278,6 +281,12 @@ def _action_refused(state: RunState, event: Event) -> None:
     p = ActionRefused.model_validate(event.payload)
     state.task(event).ended.add(p.call_id)
     _tool_result(state, event, p.call_id, f"Refused ({p.reason_code}): {p.message}", True)
+
+
+def _credential(state: RunState, event: Event) -> None:
+    ref = event.payload.get("credential_ref_digest")
+    if isinstance(ref, str):
+        state.credential_refs.add(ref)
 
 
 def _action_proposed(state: RunState, event: Event) -> None:
@@ -441,4 +450,6 @@ _HANDLERS: dict[EventType, Any] = {
     EventType.TOOL_FAILED: _tool_failed,
     EventType.OUTPUT_REJECTED: _output_rejected,
     EventType.BUDGET_CONSUMED: _budget_consumed,
+    EventType.CREDENTIAL_RESOLVED: _credential,
+    EventType.CREDENTIAL_REFUSED: _credential,
 }

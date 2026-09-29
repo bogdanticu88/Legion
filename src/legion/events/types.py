@@ -48,6 +48,8 @@ class EventType(StrEnum):
     APPROVAL_EXPIRED = "approval.expired"
     APPROVAL_CONSUMED = "approval.consumed"
     APPROVAL_INVALIDATED = "approval.invalidated"
+    CREDENTIAL_RESOLVED = "credential.resolved"
+    CREDENTIAL_REFUSED = "credential.refused"
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
     TOOL_FAILED = "tool.failed"
@@ -303,6 +305,39 @@ class ApprovalInvalidated(_Payload):
     reason: str
 
 
+class CredentialUse(_Payload):
+    # What a credential for one call stands for, and why it was accepted or refused. Never the
+    # secret: credential_ref is the authority's own identifier for it. Everything the authority
+    # supplied is cleaned of control characters and cut short before it gets here.
+    call_id: str
+    action_hash: str
+    name: str
+    authority: str
+    # the level reached (null when the evidence contradicted the request) and the level needed
+    assurance: str | None
+    required: str
+    principal: str | None = None
+    subject: str | None = None
+    grant_id: str | None = None
+    grant_fingerprint: str | None = None
+    provider: str | None = None
+    # what Legion asked for
+    requested_permissions: list[str] = Field(default_factory=list)
+    requested_resource: str | None = None
+    # what the authority said the credential can do; empty when there was no usable evidence
+    permissions: list[str] = Field(default_factory=list)
+    resource: str | None = None
+    credential_ref: str | None = None
+    # what reuse is checked against: a digest of the exact reference, scoped to the run
+    credential_ref_digest: str | None = None
+    revocation_ref: str | None = None
+    issued_at: str | None = None
+    expires_at: str | None = None
+    # the evidence showed more than was asked for
+    widened: bool = False
+    problems: list[str] = Field(default_factory=list)
+
+
 class Waiting(_Payload):
     child_task_id: str
 
@@ -370,6 +405,8 @@ PAYLOADS: dict[EventType, type[_Payload]] = {
     EventType.APPROVAL_EXPIRED: ApprovalRef,
     EventType.APPROVAL_CONSUMED: ApprovalConsumed,
     EventType.APPROVAL_INVALIDATED: ApprovalInvalidated,
+    EventType.CREDENTIAL_RESOLVED: CredentialUse,
+    EventType.CREDENTIAL_REFUSED: CredentialUse,
 }
 
 

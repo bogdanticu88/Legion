@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from legion.access.secrets import CredentialResolver, SecretRef
+from legion.access.secrets import CredentialResolver
 from legion.artifacts import ArtifactStore
 from legion.authority.ledger import Ledger
 from legion.authority.policy import PolicyDecisionPoint
@@ -18,6 +18,7 @@ from legion.domain.grant import Grant
 from legion.events.projections import RunState
 from legion.events.store import EventStore
 from legion.events.types import Event, EventDraft, EventType, _Payload, draft
+from legion.kernel.credentials import CredentialBroker
 from legion.models.resolver import Resolved
 from legion.ports.identity import AgentIdentity, IdentityPort, KillState
 from legion.tools.registry import ToolRegistry
@@ -177,7 +178,7 @@ class Kernel:
     policy: PolicyDecisionPoint
     identity: IdentityPort
     credentials: CredentialResolver
-    credential_bindings: Mapping[str, SecretRef]
+    broker: CredentialBroker
     artifacts: ArtifactStore
     settings: Mapping[str, str]
     retry: RetryPolicy

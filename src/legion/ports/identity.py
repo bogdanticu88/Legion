@@ -1,5 +1,6 @@
-# Port to an external identity/authorization service (NIA or MIA). Adapters come in Phase 8;
-# see ARCHITECTURE.md for how the methods map onto each.
+# Port to an external identity/authorization service (NIA or MIA): who is acting, whether they
+# may, and whether they've been killed. Issuing credentials is a separate port
+# (ports/credentials.py). See ARCHITECTURE.md for how the methods map onto each.
 
 from __future__ import annotations
 
@@ -7,7 +8,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-from legion.access.secrets import SecretRef
 from legion.domain.action import Action
 from legion.domain.grant import Grant
 
@@ -32,13 +32,14 @@ class ExternalDecision:
 
 
 @dataclass(frozen=True)
-class CredentialEvidence:
-    # What an identity service can say about the credential a remote tool server uses. Legion
-    # records it; it doesn't make Legion's grant any narrower downstream.
+class ServerCredentialClaim:
+    # What an identity service says about the credential an MCP server holds for the whole
+    # process. Recorded next to each call; it never raises that call's credential assurance
+    # above declared, because it isn't bound to the call.
     source: str
     subject: str
     scopes: tuple[str, ...] = ()
-    verified: bool = False
+    claimed_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,6 @@ class ExternalEvidenceRef:
 class IdentityPort(Protocol):
     async def agent_identity(self, agent_ref: str) -> AgentIdentity: ...
 
-    async def credential(self, agent_ref: str, purpose: str) -> SecretRef | None: ...
-
     async def authorize(self, action: Action, identity: AgentIdentity) -> ExternalDecision: ...
 
     async def kill_state(self, identity: AgentIdentity) -> KillState: ...
@@ -61,7 +60,7 @@ class IdentityPort(Protocol):
 
     async def evidence(self, action_hash: str) -> list[ExternalEvidenceRef]: ...
 
-    async def credential_evidence(self, server: str) -> CredentialEvidence | None: ...
+    async def credential_evidence(self, server: str) -> ServerCredentialClaim | None: ...
 
 
 class NullIdentityPort:
@@ -70,9 +69,6 @@ class NullIdentityPort:
 
     async def agent_identity(self, agent_ref: str) -> AgentIdentity:
         return AgentIdentity(agent_ref=agent_ref, source=self.source)
-
-    async def credential(self, agent_ref: str, purpose: str) -> SecretRef | None:
-        return None
 
     async def authorize(self, action: Action, identity: AgentIdentity) -> ExternalDecision:
         return ExternalDecision(allowed=True, source=self.source, reason="no external authority")
@@ -86,5 +82,5 @@ class NullIdentityPort:
     async def evidence(self, action_hash: str) -> list[ExternalEvidenceRef]:
         return []
 
-    async def credential_evidence(self, server: str) -> CredentialEvidence | None:
+    async def credential_evidence(self, server: str) -> ServerCredentialClaim | None:
         return None

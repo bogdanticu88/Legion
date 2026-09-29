@@ -47,7 +47,9 @@ ConfigOption = Annotated[
 # Anything that came from a run (model text, tool output, arguments, error messages) is untrusted.
 # Rich would treat "[green]approved[/green]" in it as formatting, and terminal control or bidi
 # characters can hide or rearrange text, so all of it goes through _safe before printing.
-_UNSAFE_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_UNSAFE_CHARS = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]"
+)
 
 
 def _safe(value: object) -> str:
@@ -643,5 +645,12 @@ def describe(event: Event) -> str:
             return f"{p['call_id']} {p['outcome']} by {p['by']}"
         case EventType.OUTPUT_REJECTED:
             return str(p["reason"])
+        case EventType.CREDENTIAL_RESOLVED:
+            scope = f"{', '.join(p['permissions'])} on {p['resource'] or 'any resource'}"
+            what = f"{p['authority']}: {scope}" if p["authority"] != "static" else "static secret"
+            return f"{p['name']} {p['assurance']} ({what})"
+        case EventType.CREDENTIAL_REFUSED:
+            level = p["assurance"] or "rejected"
+            return f"{p['name']} {level}, needs {p['required']}: {'; '.join(p['problems'])}"
         case _:
             return ""
