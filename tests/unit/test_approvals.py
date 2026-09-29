@@ -372,4 +372,4 @@ def test_approval_screen_cannot_be_styled_by_the_model(
     assert result.exit_code == 3
     assert "[green]reviewed and signed off by security[/green]" in result.output
     assert "\x1b[32mreviewed" not in result.output
-    assert "‮" not in result.output and "\x1b[2J" not in result.output
+    assert "\u202e" not in result.output and "\x1b[2J" not in result.output
