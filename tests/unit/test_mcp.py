@@ -143,6 +143,7 @@ async def test_operator_description_replaces_the_servers() -> None:
     await conn.aclose()
 
 
+@pytest.mark.demo  # E: hostile MCP result
 async def test_poisoned_result_cannot_become_authority() -> None:
     # The flagship: a tool result tells the model to call a destructive tool, the model does,
     # and Legion refuses because the grant never covered it.

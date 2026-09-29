@@ -123,6 +123,7 @@ async def test_pauses_and_runs_once_approved() -> None:
     assert world.isolated == ["HOST-A"]
 
 
+@pytest.mark.demo  # B: approval covers one exact action
 async def test_approval_for_host_a_does_not_cover_host_b() -> None:
     h, world = setup(
         [

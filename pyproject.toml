@@ -57,6 +57,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: calls a real model endpoint; skipped unless the endpoint is configured",
+    "demo: the five demonstrations listed in docs/demos.md",
 ]
 addopts = "-m 'not integration'"
 

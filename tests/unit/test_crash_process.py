@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from legion.cli import app
@@ -69,6 +70,7 @@ def legion(project: Path, *args: str, crash: bool = False) -> subprocess.Complet
     )
 
 
+@pytest.mark.demo  # C: crash mid-write goes to reconciliation
 def test_process_killed_mid_write_is_not_repeated(tmp_path: Path) -> None:
     assert CliRunner().invoke(app, ["init", str(tmp_path)]).exit_code == 0
     (tmp_path / "crashy.py").write_text(CRASHY)

@@ -130,6 +130,7 @@ async def test_child_gets_only_what_it_is_given() -> None:
 # attenuation
 
 
+@pytest.mark.demo  # D: child can't exceed parent
 async def test_child_cannot_get_a_capability_the_parent_lacks() -> None:
     wide = child(
         tools=("read_file", "write_file"), caps=("files.read:docs/**", "files.write:out/**")

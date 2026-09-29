@@ -49,6 +49,7 @@ def test_init_does_not_overwrite(project: Path) -> None:
     assert result.exit_code == 1
 
 
+@pytest.mark.demo  # A: injected instruction vs grant
 def test_end_to_end(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(project)
     code, out = cli(project, "agent", "validate", "agents/assistant.yaml")
