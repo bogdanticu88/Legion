@@ -270,7 +270,8 @@ class Legion:
                 model=resolved,
                 deadline=deadline,
             )
-            await kernel.recorder.emit(
+            # One append: a crash between these would leave a run that can't be resumed or closed.
+            created = kernel.recorder.draft(
                 EventType.RUN_CREATED,
                 ev.RunCreated(
                     agent=agent.name,
@@ -284,14 +285,15 @@ class Legion:
                     config_hash=self.config_hash,
                 ),
             )
-            await kernel.emit(
+            task_created = kernel.draft(
                 task,
                 EventType.TASK_CREATED,
                 ev.TaskCreated(
                     task=spec.model_dump(mode="json"), grant_id=grant.id, agent=agent.name
                 ),
             )
-            await kernel.recorder.emit(EventType.RUN_STARTED, ev.Empty())
+            started = kernel.recorder.draft(EventType.RUN_STARTED, ev.Empty())
+            await kernel.recorder.append([created, task_created, started])
             await self._execute(kernel, task)
             return _outcome(kernel.state)
 
@@ -319,7 +321,18 @@ class Legion:
                 and not a.expired(now)
             ]
             if waiting:
-                # still up to a human; nothing to write
+                if state.status is RunStatus.RUNNING:
+                    # Crashed after asking for approval but before recording the pause. Record
+                    # it now, so the run shows as waiting for a person rather than running.
+                    elapsed = (
+                        (state.last_ts - state.active_since).total_seconds()
+                        if state.active_since and state.last_ts
+                        else 0.0
+                    )
+                    pending = ApprovalRequired("waiting for approval", waiting[0].id)
+                    await self._pause(kernel, task, pending, elapsed)
+                    state = kernel.state
+                # otherwise still up to a human; nothing to write
                 return _outcome(state, approval_id=waiting[0].id)
 
             drafts: list[EventDraft] = []

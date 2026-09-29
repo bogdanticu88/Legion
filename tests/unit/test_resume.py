@@ -27,6 +27,19 @@ READ_THEN_WRITE = [
 ]
 
 
+class NoArgs(BaseModel):
+    pass
+
+
+def irreversible_tool() -> Any:
+    @tool(effect=EffectClass.EXTERNAL_IRREVERSIBLE, capabilities=["net.act"])
+    def isolate_like(args: NoArgs, ctx: ToolContext) -> str:
+        """Does something that can't be undone."""
+        return "done"
+
+    return isolate_like
+
+
 async def crashed(steps: list[Any], point: str, nth: int = 1, **kw: Any) -> tuple[Any, str]:
     h = build(steps, faults=crash_at(point, nth), by_turn=True, **kw)
     with pytest.raises(SimulatedCrash):
@@ -245,13 +258,31 @@ def test_file_locks_reject_odd_run_ids(tmp_path: Path) -> None:
         pass
 
 
-async def test_run_that_died_before_its_task_existed_is_refused() -> None:
-    h = build([reply("x")], faults=crash_at("before:task.created"), by_turn=True)
+async def test_crash_while_creating_a_run_leaves_nothing_half_made() -> None:
+    # run.created, task.created and run.started go in one append
+    for point in ("before:run.created", "before:task.created", "before:run.started"):
+        h = build([reply("x")], faults=crash_at(point), by_turn=True)
+        with pytest.raises(SimulatedCrash):
+            await h.run()
+        assert await h.store.runs() == []
+
+
+async def test_crash_between_approval_request_and_pause_is_recorded_as_paused() -> None:
+    h = build(
+        [call("isolate_like", {}), reply("x")],
+        faults=crash_at("before:run.paused"),
+        by_turn=True,
+        extra_tools=[irreversible_tool()],
+        grantable=("files.read:**", "net.act"),
+    )
     with pytest.raises(SimulatedCrash):
-        await h.run()
+        await h.run(agent(tools=["isolate_like"], capabilities=["net.act"]))
     [summary] = await h.store.runs()
-    with pytest.raises(ResumeRefused, match="before its task"):
-        await h.restart().resume(summary.run_id)
+    assert summary.status == "running"
+    outcome = await h.restart().resume(summary.run_id)
+    assert outcome.status is RunStatus.PAUSED and outcome.approval_id
+    [again] = await h.store.runs()
+    assert again.status == "paused"
 
 
 async def test_log_that_verifies_but_makes_no_sense_is_refused() -> None:

@@ -203,7 +203,12 @@ async def test_crashes_inside_a_tree_never_duplicate_or_widen(
         outcome = await h.run(root_spec(limits))
         run_id = outcome.run_id
     except SimulatedCrash:
-        [summary] = await h.store.runs()
+        summaries = await h.store.runs()
+        if not summaries:
+            # crashed before the run was recorded at all: nothing happened, nothing to resume
+            assert not runs
+            return
+        [summary] = summaries
         run_id = summary.run_id
     # The restarted harness replays the same script from the start, which is what a model with
     # no memory of the crash would do; Legion has to cope with that without repeating writes.
