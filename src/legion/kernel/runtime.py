@@ -24,6 +24,7 @@ from legion.domain.errors import (
     ApprovalRequired,
     BudgetExceeded,
     ConfigError,
+    CredentialUnavailable,
     DeadlineExceeded,
     Disposition,
     LegionError,
@@ -104,6 +105,7 @@ class Legion:
         identity: IdentityPort | None = None,
         credentials: CredentialResolver | None = None,
         credential_bindings: Mapping[str, SecretRef] | None = None,
+        secret_refs: Sequence[SecretRef] = (),
         artifacts: ArtifactStore | None = None,
         settings: Mapping[str, str] | None = None,
         retry: RetryPolicy | None = None,
@@ -125,6 +127,7 @@ class Legion:
         self.identity = identity or NullIdentityPort()
         self.credentials = credentials or EnvResolver()
         self.credential_bindings = dict(credential_bindings or {})
+        self.secret_refs = list(secret_refs)
         self.artifacts = artifacts or MemoryArtifactStore()
         self.settings = dict(settings or {})
         self.retry = retry or RetryPolicy()
@@ -184,6 +187,17 @@ class Legion:
         if DELEGATE in agent.tools and agent.delegation.max_depth < 1:
             errors.append("agent lists delegate but its delegation.max_depth is 0")
         return errors, warnings
+
+    async def _known_secrets(self, kernel: Kernel) -> None:
+        # Scrub every secret this configuration can resolve from the first event on, not just the
+        # ones a tool has asked for in this process: model API keys, MCP server env and headers,
+        # and tool credentials used before a restart. A missing one fails where it's used.
+        refs = [*self.credential_bindings.values(), *self.secret_refs]
+        for name in self.tools.names():
+            refs.extend(getattr(self.tools.get(name), "secret_refs", ()))
+        for ref in refs:
+            with contextlib.suppress(CredentialUnavailable):
+                kernel.recorder.remember((await self.credentials.resolve(ref)).reveal())
 
     def _kernel(self, state: RunState) -> Kernel:
         kernel = Kernel(
@@ -245,6 +259,7 @@ class Legion:
         )
         with self.locks.hold(run_id):
             kernel = self._kernel(RunState(run_id))
+            await self._known_secrets(kernel)
             task = TaskRuntime(
                 run_id=run_id,
                 task_id=task_id,
@@ -291,6 +306,7 @@ class Legion:
             if is_terminal_run(state.status):
                 raise ResumeRefused(f"run {run_id} already {state.status.value}")
             kernel = self._kernel(state)
+            await self._known_secrets(kernel)
             task = await self._restore(state)
             view = state.tasks[task.task_id]
             now = self.now()

@@ -133,7 +133,8 @@ MIN_SECRET_LENGTH = 4
 def redact_text(text: str, secrets: set[str] | list[str]) -> tuple[str, int]:
     # also catches the JSON-escaped form of each value
     count = 0
-    for value in secrets:
+    # longest first, so a secret that contains another isn't left half replaced
+    for value in sorted(secrets, key=len, reverse=True):
         for form in {value, json.dumps(value)[1:-1]}:
             if form and form in text:
                 count += text.count(form)
@@ -145,7 +146,7 @@ def _redact_tree(value: Any, secrets: set[str]) -> Any:
     if isinstance(value, str):
         return redact_text(value, secrets)[0]
     if isinstance(value, dict):
-        return {k: _redact_tree(v, secrets) for k, v in value.items()}
+        return {_redact_tree(k, secrets): _redact_tree(v, secrets) for k, v in value.items()}
     if isinstance(value, list):
         return [_redact_tree(v, secrets) for v in value]
     return value

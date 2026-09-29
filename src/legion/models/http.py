@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -34,7 +35,7 @@ async def post_json(
         raise ModelUnavailable(f"cannot reach {url}: {type(exc).__name__}") from exc
 
     if response.status_code >= 400:
-        raise _error_for(response)
+        raise _error_for(response, headers)
     try:
         data = loads_strict(response.text)
     except json.JSONDecodeError as exc:
@@ -61,9 +62,14 @@ def token_count(value: Any) -> int:
     return value
 
 
-def _error_for(response: httpx.Response) -> Exception:
+def _error_for(response: httpx.Response, sent: Mapping[str, str]) -> Exception:
     status = response.status_code
     detail = _detail(response)
+    # Some servers echo the request, auth header included, in their error text.
+    for value in sent.values():
+        for part in {value, value.rpartition(" ")[2]}:
+            if len(part) >= 8:
+                detail = detail.replace(part, "[redacted]")
     if status in (401, 403):
         return ModelAuthError(f"provider refused credentials ({status}): {detail}")
     if status == 429:

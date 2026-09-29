@@ -614,6 +614,23 @@ async def test_remote_origin_and_credential_evidence_are_recorded() -> None:
     await conn.aclose()
 
 
+async def test_server_echoing_its_own_token_is_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = "mcp-env-SENTINEL-51ab"
+    monkeypatch.setenv("LAB_TOKEN", token)
+    lab = Lab()
+    lab.replies["read_note"] = f"authenticated as {token}"
+    config = server_config(read_note=READ).model_copy(update={"env": {"TOKEN": "env:LAB_TOKEN"}})
+    conn, found = await connect(lab, await pinned(lab, config))
+    spec = mcp_agent(["mcp_lab_read_note"], ["mcp.lab.read_note:notes/**"])
+    h, outcome = await run_with(
+        lab, [call("mcp_lab_read_note", {"path": "notes/a.md"}), reply("ok")], spec, found
+    )
+    [done] = await h.payloads(outcome.run_id, E.TOOL_COMPLETED)
+    assert done["content"] == "authenticated as [redacted]"
+    assert token not in h.provider.requests[-1].model_dump_json()
+    await conn.aclose()
+
+
 def test_manifest_config_is_checked() -> None:
     with pytest.raises(ConfigError):
         McpServerConfig(transport="stdio", tools={}).check("lab")

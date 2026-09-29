@@ -326,6 +326,11 @@ class McpTool:
     def spec(self) -> ToolSpec:
         return self._spec
 
+    @property
+    def secret_refs(self) -> list[SecretRef]:
+        config = self.connection.config
+        return [SecretRef.parse(v) for v in (*config.env.values(), *config.headers.values())]
+
     def resource_of(self, arguments: dict[str, Any]) -> str | None:
         return resource_from_argument(self._spec, arguments)
 

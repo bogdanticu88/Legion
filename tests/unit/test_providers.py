@@ -332,6 +332,25 @@ class TestAnthropic:
         if error is RateLimited:
             assert info.value.retry_after == 7.0
 
+    @pytest.mark.parametrize("status", [401, 403, 429, 500, 400])
+    async def test_error_that_echoes_the_key_does_not_carry_it(self, status: int) -> None:
+        echo = {"error": {"type": "auth", "message": f"bad header x-api-key: {KEY}"}}
+        with pytest.raises(Exception) as info:
+            await anthropic(Recorder(httpx.Response(status, json=echo))).generate(request())
+        assert KEY not in str(info.value)
+        oai = {"error": {"message": "got Authorization: Bearer sk-oai-long-enough"}}
+        access = ApiKeyAccess(
+            SecretRef.parse("env:OAI"), EnvResolver({"OAI": "sk-oai-long-enough"})
+        )
+        provider = OpenAICompatProvider(
+            base_url="http://gw/v1/",
+            access=access,
+            client=client(Recorder(httpx.Response(status, json=oai))),
+        )
+        with pytest.raises(Exception) as info:
+            await provider.generate(request())
+        assert "sk-oai-long-enough" not in str(info.value)
+
     async def test_transport_failure_is_unavailable(self) -> None:
         def fail(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("refused")

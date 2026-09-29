@@ -162,6 +162,11 @@ class Loaded:
             grantable=[Capability.parse(c) for c in self.config.authority.grantable],
             credentials=env,
             credential_bindings={k: SecretRef.parse(v) for k, v in self.config.credentials.items()},
+            secret_refs=[
+                SecretRef.parse(p.access.secret)
+                for p in self.config.providers.values()
+                if p.access.secret is not None
+            ],
             artifacts=FileArtifactStore(self.resolve_path(self.config.artifacts)),
             settings={**self.config.tool_settings, "config_dir": str(self.root)},
             retry=RetryPolicy(**self.config.retry.model_dump()),

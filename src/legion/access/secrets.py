@@ -22,7 +22,8 @@ class SecretRef(BaseModel):
     def parse(cls, text: str) -> SecretRef:
         match = _REF.match(text)
         if not match:
-            raise ConfigError(f"not a secret reference (expected env:NAME): {text!r}")
+            # the value may be a pasted secret, so it isn't repeated in the error
+            raise ConfigError("not a secret reference: expected env:NAME")
         return cls(scheme="env", name=match.group(2))
 
     def __str__(self) -> str:
