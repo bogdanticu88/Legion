@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_serializer
+from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 from legion.domain.budget import BudgetLimits
 from legion.domain.capability import Capability
@@ -30,6 +31,14 @@ class Grant(BaseModel):
     @field_serializer("capabilities")
     def _sorted(self, caps: frozenset[Capability]) -> list[str]:
         return sorted(str(cap) for cap in caps)
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def _parse(cls, value: Any) -> Any:
+        # Events store capabilities as strings; a grant read back from the log must round-trip.
+        if isinstance(value, list | tuple | set | frozenset):
+            return frozenset(Capability.parse(v) if isinstance(v, str) else v for v in value)
+        return value
 
     def covers(self, required: Capability) -> bool:
         return any(cap.covers(required) for cap in self.capabilities)

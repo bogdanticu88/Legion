@@ -73,15 +73,32 @@ def _at_least_as_broad(wide: Capability, narrow: Capability) -> bool:
         return True
     if narrow.resource is None:
         return False
-    # Glob containment in general is hard; accept identical patterns or a narrow literal that the
-    # wide pattern matches. Anything else is refused, which errs towards narrower authority.
-    return wide.resource == narrow.resource or (
-        not _has_glob(narrow.resource) and resource_matches(wide.resource, narrow.resource)
-    )
+    return glob_contains(wide.resource, narrow.resource)
+
+
+def glob_contains(wide: str, narrow: str) -> bool:
+    """True only when every resource `narrow` matches is also matched by `wide`.
+
+    General glob containment is not attempted. Three cases are decided, anything else is refused,
+    which errs towards less authority: identical patterns; a literal that `wide` matches; and
+    `wide` being a literal prefix followed by `**` while `narrow`'s literal prefix extends it.
+    """
+    if wide == narrow:
+        return True
+    if not _has_glob(narrow):
+        return resource_matches(wide, narrow)
+    if wide.endswith("**") and not _has_glob(wide[:-2]):
+        return _literal_prefix(narrow).startswith(wide[:-2])
+    return False
 
 
 def _has_glob(pattern: str) -> bool:
     return "*" in pattern or "?" in pattern
+
+
+def _literal_prefix(pattern: str) -> str:
+    cut = min((i for i, c in enumerate(pattern) if c in "*?"), default=len(pattern))
+    return pattern[:cut]
 
 
 def resource_matches(pattern: str, resource: str) -> bool:
