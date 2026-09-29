@@ -84,16 +84,15 @@ class AgentLoop:
         attempt = 0
         while True:
             attempt += 1
-            await self._charge_before(task, Dimension.MODEL_CALLS)
             for dimension in (Dimension.TOKENS, Dimension.COST_USD):
                 remaining = self.k.ledger(task).remaining(dimension)
                 if remaining is not None and remaining <= 0:
+                    limit = task.grant.budget.limit(dimension)
                     await self._exceeded(
                         task,
-                        BudgetExceeded(
-                            dimension.value, task.grant.budget.limit(dimension), remaining
-                        ),
+                        BudgetExceeded(dimension.value, limit, self.k.ledger(task).used(dimension)),
                     )
+            await self._charge_before(task, Dimension.MODEL_CALLS)
             await self.k.check_kill(task)
             await self.k.emit(
                 task,

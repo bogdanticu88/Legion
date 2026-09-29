@@ -127,9 +127,15 @@ class ActionPipeline:
         except jsonschema.ValidationError as exc:
             where = "/".join(str(p) for p in exc.absolute_path) or "arguments"
             raise InvalidArguments(f"{where}: {exc.message}") from exc
-        except jsonschema.SchemaError as exc:
-            raise ToolFailed(f"tool {spec.name} has an invalid input schema") from exc
-        resource = tool.resource_of(call.arguments)
+        try:
+            resource = tool.resource_of(call.arguments)
+        except ActionRefused:
+            raise
+        except Exception as exc:
+            # If we cannot tell what the call touches, we cannot check it. Refuse, do not crash.
+            raise InvalidArguments(
+                f"cannot determine what this call acts on ({type(exc).__name__})"
+            ) from exc
         return Action(
             tool=spec.name,
             arguments=call.arguments,
@@ -284,21 +290,21 @@ class ActionPipeline:
                 return
 
             assert result is not None
-            await self._complete(task, call, action, result, secrets, started)
+            await self._complete(tool, task, call, action, result, secrets, started, attempt)
             return
 
     async def _complete(
         self,
+        tool: Tool,
         task: TaskRuntime,
         call: ToolCallPart,
         action: Action,
         result: ToolResult,
         secrets: dict[str, Secret],
         started: float,
+        attempt: int,
     ) -> None:
-        spec = self.k.tools.get(action.tool)
-        assert spec is not None
-        output_schema = spec.spec.output_schema
+        output_schema = tool.spec.output_schema
         correlation = {"action_hash": action.hash}
         if output_schema is not None and not result.is_error:
             try:
@@ -313,7 +319,7 @@ class ActionPipeline:
                     ev.ToolFailed(
                         call_id=call.id,
                         action_hash=action.hash,
-                        attempt=1,
+                        attempt=attempt,
                         error_code=bad.code,
                         message=bad.message,
                         disposition=bad.disposition.value,
@@ -326,7 +332,7 @@ class ActionPipeline:
         content, redactions = _redact(result.for_model(), secrets)
         artifact = None
         truncated = False
-        limit = spec.spec.max_output_chars
+        limit = tool.spec.max_output_chars
         if len(content) > limit:
             artifact = self.k.artifacts.put(content.encode("utf-8"))
             content = (

@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, Self
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from legion.access.secrets import Secret
@@ -49,6 +51,14 @@ class ToolSpec(BaseModel):
                 raise ValueError(f"tool {self.name} must require concrete capabilities")
         if self.input_schema.get("type") != "object":
             raise ValueError(f"tool {self.name} input schema must describe an object")
+        for schema in (self.input_schema, self.output_schema):
+            if schema is not None:
+                try:
+                    Draft202012Validator.check_schema(schema)
+                except SchemaError as exc:
+                    raise ValueError(
+                        f"tool {self.name} has an invalid schema: {exc.message}"
+                    ) from exc
         return self
 
 

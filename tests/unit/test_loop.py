@@ -199,3 +199,20 @@ async def test_rebuilt_state_matches_what_the_model_saw() -> None:
     assert tuple(task.transcript[: len(seen)]) == seen
     assert task.transcript[-1] == reply("done").message
     assert not task.in_flight
+
+
+async def test_exhausted_tokens_do_not_charge_another_model_call() -> None:
+    h = build([call("read_file", {"path": "docs/a.md"}), reply("x")])
+    outcome = await h.run(agent(budget=BudgetLimits(tokens=15)))
+    assert outcome.error_code == "budget_exceeded"
+    consumed = await h.payloads(outcome.run_id, E.BUDGET_CONSUMED)
+    assert [c["total"] for c in consumed if c["dimension"] == "model_calls"] == ["1"]
+    assert len(h.provider.requests) == 1
+
+
+def test_naive_deadline_is_rejected() -> None:
+    from legion.domain.task import TaskSpec
+    from tests.support import PRINCIPAL
+
+    with pytest.raises(ValueError, match="timezone"):
+        TaskSpec(id="t", objective="x", created_by=PRINCIPAL, deadline=datetime(2030, 1, 1))

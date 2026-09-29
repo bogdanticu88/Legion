@@ -4,7 +4,14 @@ import re
 from enum import StrEnum
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from legion.canonical import digest
 from legion.domain.budget import BudgetLimits
@@ -68,6 +75,10 @@ class AgentSpec(BaseModel):
         if isinstance(value, list | tuple):
             return tuple(Capability.parse(v) if isinstance(v, str) else v for v in value)
         return value
+
+    @field_serializer("capabilities")
+    def _caps_as_text(self, caps: tuple[Capability, ...]) -> list[str]:
+        return [str(c) for c in caps]
 
     @model_validator(mode="after")
     def _unique_tools(self) -> Self:

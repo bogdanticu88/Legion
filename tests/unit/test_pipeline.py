@@ -328,3 +328,17 @@ async def test_parallel_calls_in_one_turn_run_in_order() -> None:
         if e.type in (E.TOOL_COMPLETED, E.ACTION_REFUSED)
     ]
     assert order == [(E.TOOL_COMPLETED, "c1"), (E.ACTION_REFUSED, "c2")]
+
+
+async def test_crashing_resource_function_refuses_instead_of_crashing() -> None:
+    @tool(effect=EffectClass.READ, capabilities=["files.read"], resource=lambda a: a.nope)
+    async def broken(args: Empty, ctx: ToolContext) -> str:
+        """Resource function is wrong."""
+        return "should not run"
+
+    h = build([call("broken", {}), reply("ok")], extra_tools=[broken])
+    outcome = await h.run(agent(tools=["broken"], capabilities=["files.read:**"]))
+    assert outcome.status is RunStatus.COMPLETED
+    [refused] = await h.payloads(outcome.run_id, E.ACTION_REFUSED)
+    assert refused["reason_code"] == "invalid_arguments"
+    assert E.TOOL_STARTED not in await h.types(outcome.run_id)

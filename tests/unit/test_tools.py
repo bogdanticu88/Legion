@@ -102,3 +102,13 @@ async def test_secrets_do_not_print() -> None:
         await resolver.resolve(SecretRef.parse("env:MISSING"))
     with pytest.raises(ConfigError):
         SecretRef.parse("file:/etc/passwd")
+
+
+def test_invalid_schemas_are_rejected_at_registration() -> None:
+    with pytest.raises(ValidationError, match="invalid schema"):
+        ToolSpec(
+            name="t",
+            description="d",
+            effect=EffectClass.PURE,
+            input_schema={"type": "object", "properties": {"x": {"type": "nonsense"}}},
+        )
