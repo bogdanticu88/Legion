@@ -73,7 +73,7 @@ and decimals as strings.
 | `model.requested` | `attempt`, `provider`, `model`, `message_count`, `tool_names`, `request_hash`, `max_output_tokens` | before each attempt. The request itself isn't stored since it comes from the transcript; the hash lets you compare two requests. Resume doesn't use it |
 | `model.responded` | `attempt`, `message`, `stop_reason`, `usage`, `cost_usd`, `latency_ms` | `message` is stored in full |
 | `model.failed` | `attempt`, `error_code`, `message`, `disposition`, `will_retry`, `retry_in_ms` | |
-| `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required` | the call passed lookup and schema checks |
+| `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope` and, if the identity service reported one, `credential_evidence` |
 | `action.refused` | `call_id`, `tool`, `action_hash`, `reason_code`, `message` | the model gets `message`. `action_hash` is null if the call was refused before it became an Action |
 | `action.repeated` | `call_id`, `tool`, `repeat_key`, `count` | third or later identical call |
 | `action.authorized` | `call_id`, `action_hash`, `reasons` | grant, policy and external check all passed |

@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-uv sync
+uv sync --extra mcp
 uv run pytest
 ```
 

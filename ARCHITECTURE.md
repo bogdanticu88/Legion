@@ -229,13 +229,42 @@ Details in ADR 0016.
 
 ## Tools
 
-Tool sources plug in behind one `Tool` protocol: native Python now, MCP in Phase 5. A tool without
+Tool sources plug in behind one `Tool` protocol: native Python and MCP. A tool without
 an effect class and capabilities can't be registered. Names must match `[a-z][a-z0-9_]{0,63}`
 because that works with every provider.
 
 The model only sees the tools the agent lists, and calling anything else gets refused. Native
 tools run inside the Legion process, so the checks decide whether a tool runs but not what its code
 does. That's why there's no shell tool.
+
+### MCP
+
+MCP tools are ordinary tools with a remote `invoke` (ADR 0018). The operator lists each server
+and the tools to use from it in `legion.yaml`:
+
+```yaml
+mcp_servers:
+  github:
+    transport: stdio
+    command: [github-mcp-server, stdio]
+    env: {GITHUB_TOKEN: env:GITHUB_TOKEN}
+    credential_scope: fine-grained token, issues read/write on legion only
+    tools:
+      create_issue:
+        effect: write
+        resource_arg: repo
+        pin: sha256:...
+```
+
+That gives the tool `mcp_github_create_issue`, which needs `mcp.github.create_issue:<repo>`. At
+startup Legion connects, lists the server's tools and registers only manifest entries whose pin
+matches; before each call it checks the pin again. `legion mcp inspect github` shows the current
+pins, what the server claims about each tool, and the tools it offers that aren't used.
+
+The model sees the server's description (cleaned and capped) unless the manifest replaces it.
+Results are reduced to text within size limits. The effect class and everything to do with
+authority come from the manifest. Each `action.proposed` for an MCP tool records where it ran and
+the credential scope the operator declared.
 
 ## Multi-tenancy (not built)
 

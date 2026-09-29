@@ -19,7 +19,7 @@ the current code; otherwise the phase is given.
 | Legion and native Python tools | yes | Same process. A malicious tool can do anything Python can. |
 | Model output | no | Shaped by everything the model read, including attacker text. |
 | Tool output | no | Can contain injected instructions. |
-| MCP server descriptions and results (Phase 7) | no | They end up in the prompt and can change. |
+| MCP servers: descriptions, schemas, annotations, results, errors, stderr | no | They end up in the prompt, can change, and can lie. The server's own credentials are outside Legion's control. |
 | Human approver | mostly | Can be rushed or phished. Not authenticated: it's whoever runs the CLI. |
 | The host | yes | Whoever owns it owns the process and the log. |
 
@@ -32,7 +32,13 @@ limits what the model can make happen.
 |---|---|---|---|
 | Prompt injection, direct or through tool output | Every action is checked against the grant and policy whatever the model wants. Tool output goes back to the model as data, never to the harness as instructions | now | Anything the grant allows can still happen. There's no tracking of which input influenced which decision |
 | Malicious native tool | nothing | - | Tools are trusted code. Review them |
-| Malicious MCP server, tool poisoning, rug pulls | Operator manifest, pinned description hash, unlisted tools refused | Phase 7 | A pinned server can still return hostile results |
+| Malicious MCP server, tool poisoning, rug pulls | Only tools in the operator's manifest are registered, each with a pin over the server's identity and the tool's name, description, schemas and annotations. Pins are checked at startup and before every call; a changed tool is blocked and nothing is sent. Descriptions are cleaned and capped, and can be replaced by the operator | now | A pinned server can still return hostile results. The pin covers how the server is reached, not the code it runs: `npx pkg` without a version can change underneath |
+| MCP discovery treated as authority | Each MCP tool needs `mcp.<server>.<tool>`, has to be listed by the agent and granted to the task, and goes through the same pipeline. Same-named tools on two servers are different capabilities | now | |
+| MCP annotations lying about effects | The effect class comes from the manifest and defaults to `external_irreversible`. Annotations are recorded and shown, never used | now | An operator who sets `effect: read` on a tool that writes gets retries on it |
+| MCP result steering the model | Results are tool output: text only, images and blobs replaced, links never fetched, size, depth and item limits. Whatever the model then asks for is checked against the grant | now | The model can still use anything the grant allows |
+| MCP server acting and then failing | Failure before sending is clean; after sending it's retried for reads and in doubt for anything else. A request for more input ends as an error. No automatic retries of MCP writes | now | A server that did the work and returns an error looks like a clean failure |
+| MCP server credentials broader than the grant | The operator writes down `credential_scope`, recorded on every call and shown on approvals. `IdentityPort.credential_evidence` can report the real credential | interface now, NIA adapter later | Legion's grant limits which calls reach the server, not what the server's own credential allows. No end-to-end least privilege unless the server's credential is also narrow |
+| MCP server hanging or flooding | Connect and listing bounded by `discovery_timeout_s`, calls by `timeout_s`. Oversized responses are withheld from the model. Stdio stderr goes to a log file, not the terminal. Remote servers need https | now | The SDK reads a whole response into memory before Legion sees its size |
 | Poisoned tool output | Output schema checks, size limit, secret redaction | now | Schemas don't catch meaning |
 | Credential theft | Config holds references only. Secrets never go into model context. Resolved secret values are scrubbed from every event and from tool output | now | A tool that encodes or splits a secret gets past the scrubbing. Secrets under 4 characters aren't scrubbed |
 | Secrets in logs | `Secret` won't print its value. Tests check the database file for a planted secret | now | A secret the model passes as a plain argument isn't recognised as one |
@@ -67,3 +73,4 @@ limits what the model can make happen.
 - A compromised or careless approver.
 - Leaking data through something the grant allows, like writing it to a file someone else reads.
 - What any external agent runtime does, if one is ever added (ADR 0006).
+- What an MCP server does with its own credentials, whether or not Legion calls it.

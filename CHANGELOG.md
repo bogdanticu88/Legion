@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Phase 4
+
+- MCP tools through the official Python SDK, as the optional extra `mcp`. Servers and the tools
+  to use from them are declared under `mcp_servers` in `legion.yaml`; nothing else a server
+  offers is registered.
+- Each MCP tool is `mcp_<server>_<tool>` and needs `mcp.<server>.<tool>`, so it's granted,
+  offered, checked, approved and budgeted like a native tool.
+- Pins over the server's identity and each tool's name, description, schemas and annotations,
+  checked at startup and before every call. A changed tool is blocked for the rest of the
+  process and nothing is sent.
+- Effect class from the manifest, defaulting to `external_irreversible`. Annotations are recorded
+  and ignored. Failures before sending are clean, after sending they're retried for reads and in
+  doubt for anything else.
+- Results reduced to text, with size, depth and item limits; images and blobs omitted, links not
+  fetched, requests for more input end as errors.
+- `action.proposed` has a `remote` field with the server, pin and declared credential scope, plus
+  credential evidence from `IdentityPort.credential_evidence` when there is any. Approvals are
+  bound to the tool's origin.
+- `legion mcp inspect <server>`. Stdio server stderr goes to `.legion/mcp/<server>.stderr.log`.
+- Tests: a hostile in-process MCP server (poisoned descriptions and results, tools appearing,
+  vanishing and changing, duplicates, bad schemas, oversized and odd responses, timeouts,
+  dropped connections, lying errors, input requests), approvals and delegation with MCP tools,
+  and a real stdio server that dies mid-write, recovered through the CLI.
+
 ### Phase 3
 
 - Delegation: the built-in `delegate` tool makes a child task that runs under a narrower grant.

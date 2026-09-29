@@ -1,6 +1,6 @@
 # ADR 0009: MCP is a tool adapter with an operator-owned manifest
 
-Status: accepted (built in Phase 5)
+Status: accepted, built in Phase 4 (details in ADR 0018)
 
 ## Context
 
@@ -18,4 +18,4 @@ become Legion's internal model.
 ## Consequences
 
 - An MCP server is governed only as far as its manifest says.
-- Description changes are caught when connecting, before the tool is used.
+- Description changes are caught when connecting and again before each call.

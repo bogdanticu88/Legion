@@ -10,8 +10,8 @@ It doesn't care which model you use or what the agent is for. An agent can hand 
 to other agents; each child gets narrower permissions and a share of its parent's budget, never
 more.
 
-Status: early (Phase 3 of 8, see [the roadmap](docs/roadmap.md)). Children run one at a time, no
-MCP yet. I wouldn't point it at anything that matters.
+Status: early (Phase 4 of 8, see [the roadmap](docs/roadmap.md)). Children run one at a time. MCP
+servers work for tools only. I wouldn't point it at anything that matters.
 
 ## Why I'm building it
 
@@ -99,6 +99,22 @@ uv run legion resume <run-id>          # paused: call w1 may or may not have tak
 uv run legion reconcile <run-id> w1 --outcome applied --note "file is there"
 uv run legion resume <run-id>
 ```
+
+### MCP servers
+
+MCP tools are used only if `legion.yaml` lists them, with an effect class, a resource argument
+and a pin:
+
+```bash
+uv sync --extra mcp
+uv run legion mcp inspect github      # current pins, what the server claims, unused tools
+```
+
+The agent then lists `mcp_github_create_issue` and asks for `mcp.github.create_issue:legion` like
+any other capability. If the server changes the tool's description or schema, or the command or
+credential used to reach it changes, the pin stops matching and the tool is blocked before
+anything is sent. An MCP tool with no effect class given is treated as irreversible, so it needs
+approval. See ARCHITECTURE.md and ADR 0018.
 
 To try a real model, edit `legion.yaml` so a real binding is `general/default` (Ollama at
 `http://localhost:11434/v1`, or Anthropic with `ANTHROPIC_API_KEY` set). The agent files stay the
@@ -191,7 +207,11 @@ whoever can write the event store can rewrite it or add to it.
   in-doubt action.
 - The token budget caps a call's output but not its input. Cost is checked after each call.
 - The hash chain catches edited or missing events but not events cut off the end.
-- No MCP, streaming or images. The operator declares what each model supports.
+- MCP: tools only, no resources or prompts. Legion's grant decides which calls reach a server,
+  not what the server's own credential allows; the operator records that as `credential_scope`.
+  Pins cover how a server is reached and what it says about its tools, not the code it runs.
+  A server that acts and then reports an error looks like a clean failure.
+- No streaming or images. The operator declares what each model supports.
 - The OpenAI-compatible adapter has been run against qwen2.5:1.5b on Ollama. That model is too
   small to use delegation, so delegation is only tested with scripted and generated model output.
   The Anthropic adapter hasn't been run against the real API.
@@ -199,7 +219,7 @@ whoever can write the event store can rewrite it or add to it.
 ## Roadmap
 
 Next: several children at once, then plans a person can approve once, built-in specialist agents,
-memory that remembers where facts came from, MCP, and exports plus the NIA identity adapter. Details in
+memory that remembers where facts came from, and exports plus the NIA identity adapter. Details in
 [docs/roadmap.md](docs/roadmap.md).
 
 ## Related projects
@@ -211,7 +231,7 @@ neither.
 ## Development
 
 ```bash
-uv sync
+uv sync --extra mcp
 uv run pytest
 uv run ruff check src tests && uv run mypy
 ```
