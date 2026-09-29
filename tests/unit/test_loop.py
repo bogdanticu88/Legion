@@ -216,3 +216,20 @@ def test_naive_deadline_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="timezone"):
         TaskSpec(id="t", objective="x", created_by=PRINCIPAL, deadline=datetime(2030, 1, 1))
+
+
+async def test_deadline_without_wall_clock_limit() -> None:
+    from legion.domain.budget import BudgetLimits as B
+
+    @tool(effect=EffectClass.READ, capabilities=["files.read"], resource=lambda a: "docs/x")
+    async def slow(args: Empty, ctx: ToolContext) -> str:
+        """Slow read."""
+        await asyncio.sleep(5)
+        return "late"
+
+    h = build([call("slow", {}), reply("never")], extra_tools=[slow])
+    outcome = await h.run(
+        agent(tools=["slow"], capabilities=["files.read:docs/**"], budget=B(wall_seconds=None)),
+        deadline=datetime.now(UTC) + timedelta(milliseconds=200),
+    )
+    assert outcome.error_code == "deadline_exceeded"

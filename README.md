@@ -150,6 +150,10 @@ cannot protect the log from whoever controls the host.
 - The resolver does not probe endpoints; the operator declares what each model can do.
 - Tool calls within one model turn run sequentially.
 - Tested against recorded HTTP exchanges. The optional real-model tests have not been run in CI.
+- The token budget caps output per call but not input, so one call can overshoot by the size of
+  its prompt; cost is checked after each call. Details in the threat model.
+- The event chain detects edits and gaps but not removal of the newest events, which needs an
+  external record of the head.
 
 ## Roadmap
 

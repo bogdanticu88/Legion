@@ -38,12 +38,21 @@ async def post_json(
     if response.status_code >= 400:
         raise _error_for(response)
     try:
-        data = response.json()
+        data = loads_strict(response.text)
     except json.JSONDecodeError as exc:
         raise MalformedModelResponse("response body is not JSON") from exc
     if not isinstance(data, dict):
         raise MalformedModelResponse("response body is not a JSON object")
     return data
+
+
+def loads_strict(text: str) -> Any:
+    """json.loads without NaN or Infinity, which Python accepts and canonical JSON does not."""
+    return json.loads(text, parse_constant=_reject_constant)
+
+
+def _reject_constant(name: str) -> Any:
+    raise MalformedModelResponse(f"response contains {name}, which is not valid JSON")
 
 
 def _error_for(response: httpx.Response) -> Exception:

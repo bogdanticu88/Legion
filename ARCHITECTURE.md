@@ -26,7 +26,7 @@ lives in `examples/`, not in the package.
  ──────────▶│     │                                                                     │
             │     ▼                                                                     │
             │  AgentLoop (per task)                                                     │
-            │     context ──▶ ModelCaller ──▶ ModelProvider adapter ──▶ model endpoint  │
+            │     context ──▶ model call ──▶ ModelProvider adapter ──▶ model endpoint   │
             │        ▲             │ (retries, budget, events)                           │
             │        │             ▼                                                     │
             │        │        tool calls                                                 │
@@ -51,8 +51,8 @@ lives in `examples/`, not in the package.
 | Type | What it is | Mutable? |
 |---|---|---|
 | `AgentSpec` | Name, instructions, model requirement, tool names, requested capabilities, budget, optional output schema | No |
-| `Task` | Objective, context, constraints, parent, creator, status | Status only, through a transition table |
-| `Run` | One root task tree, its event log and ledger | Status only |
+| `TaskSpec` | Objective, context, constraints, parent, creator, deadline | No; task status lives in the event log and changes only through a transition table |
+| `RunState` | Projection of one run's events: statuses, transcripts, consumption, in-flight actions | Only by applying events |
 | `ToolSpec` | Name, description, input and output schema, required capabilities, effect class, timeout, credential names | No |
 | `Action` | One proposed tool call in canonical form, with its hash | No |
 | `Grant` | Capabilities, budget limits, identity context, expiry, parent grant | No; derive a narrower one with `attenuate` |
@@ -84,7 +84,11 @@ are never covered.
 
 Delegation (Phase 3) derives a child grant with `Grant.attenuate`, which raises unless every
 capability, every budget limit and the expiry are at most the parent's. The function exists and
-is property-tested now so the rule is fixed before delegation is built.
+is property-tested now so the rule is fixed before delegation is built. Two things it does not
+do yet, both Phase 3: it compares the child's limits with the parent's limits, not with what the
+parent has left, and it accepts any identity context. The delegation step will carve the budget
+from the parent's remaining ledger and derive the child identity from the parent's
+`on_behalf_of` chain rather than accept it from the caller.
 
 ### Policy
 
@@ -120,7 +124,8 @@ See [docs/events.md](docs/events.md) for every event type and payload.
 Three separate concerns:
 
 - **ModelProvider** speaks one wire protocol (`openai_compat`, `anthropic`, `scripted` for tests)
-  and reports what it supports through `ModelCapabilities`.
+  and declares which `ModelFeature`s Legion can use through it. A binding's usable features are
+  what the operator declares for the model intersected with what the adapter supports.
 - **AccessProvider** decides how requests are authenticated: none (local), API key, and later
   enterprise gateway headers, workload identity and documented OAuth flows.
 - **ModelResolver** maps an agent's requirement, such as `general/default` needing tools, to a
@@ -146,7 +151,9 @@ that would claim enforcement Legion does not have.
 
 Configuration holds references such as `env:ANTHROPIC_API_KEY`, never values. A `Secret` wraps
 the value, and its `repr` and `str` never show it. Access providers resolve secrets per request.
-Tools receive only the credentials their spec declares, resolved at step 7. Tool output is scanned
+Tools receive only the credentials their spec declares, resolved at step 7. Every resolved value
+is registered with the recorder, which redacts it (and its JSON-escaped form) from every event
+payload, including error messages on fatal paths. Tool output is also scanned
 for the values of those credentials and redacted before it reaches the model or the event log.
 
 ## Identity integration (NIA and MIA)
@@ -157,10 +164,10 @@ risk across runs belong to external authorities reached through `IdentityPort`. 
 
 | IdentityPort method | NIA | MIA |
 |---|---|---|
-| `kill_state(agent_ref)` | kill sentinel, revoked credential | mandate revoked or suspect |
+| `kill_state(identity)` | kill sentinel, revoked credential | mandate revoked or suspect |
 | `authorize(action, identity)` | gateway decision for the tool call | `authz.authorize` |
 | `credential(agent_ref, purpose)` | `POST /agents/{ref}/credentials` | token exchange |
-| `on_delegation(parent, child, grant)` | register child and grant a subset | `mandates.delegate` |
+| `on_delegation(parent, child)` | register child and grant a subset | `mandates.delegate` |
 | `evidence(action_hash)` | incidents and audit records | audit records |
 
 The effective permission for an action is the Legion grant intersected with the external
@@ -179,7 +186,7 @@ Every error type carries one disposition. The loop reads the disposition, not th
 | `retryable` | Retry with bounded backoff, each attempt counted | model timeout, rate limit, 5xx, malformed response, read-tool timeout |
 | `recoverable` | Tell the model and let it choose again | unknown tool, invalid arguments, capability or policy denial, tool raised, repeated action |
 | `fatal` | Fail the task and the run | budget exceeded, auth failure, context exhausted, loop detected, write in doubt (Phase 1) |
-| `escalate` | Pause for a human (Phase 2) | write in doubt, credential expired |
+| `escalate` (added in Phase 2) | Pause for a human | write in doubt, credential expired |
 
 Retries are bounded by `RetryPolicy` and by the budget, so a model cannot cause unbounded retries
 by producing bad output. Five identical actions in one task is a fatal loop; the third is refused

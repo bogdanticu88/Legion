@@ -4,6 +4,7 @@ enterprise gateways, which is why capabilities come from the binding and are nev
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Literal
 
 import httpx
@@ -14,7 +15,7 @@ from legion.domain.errors import MalformedModelResponse
 from legion.domain.messages import Message, TextPart, ToolCallPart, ToolResultPart
 from legion.events.types import Usage
 from legion.models.base import ModelRequest, ModelResponse, StopReason, merge_options
-from legion.models.http import post_json
+from legion.models.http import loads_strict, post_json
 
 _STOP = {
     "stop": StopReason.END,
@@ -142,7 +143,7 @@ def _tool_call(index: int, call: Any) -> ToolCallPart:
     arguments = function.get("arguments") or "{}"
     if isinstance(arguments, str):
         try:
-            arguments = json.loads(arguments)
+            arguments = loads_strict(arguments)
         except json.JSONDecodeError as exc:
             raise MalformedModelResponse(
                 f"arguments for {function['name']} are not valid JSON"
@@ -150,7 +151,8 @@ def _tool_call(index: int, call: Any) -> ToolCallPart:
     if not isinstance(arguments, dict):
         raise MalformedModelResponse(f"arguments for {function['name']} are not an object")
     call_id = call.get("id") if isinstance(call.get("id"), str) and call.get("id") else None
-    return ToolCallPart(id=call_id or f"call_{index}", name=function["name"], arguments=arguments)
+    fallback = f"call_{uuid.uuid4().hex[:12]}_{index}"
+    return ToolCallPart(id=call_id or fallback, name=function["name"], arguments=arguments)
 
 
 def _usage(raw: Any) -> Usage:

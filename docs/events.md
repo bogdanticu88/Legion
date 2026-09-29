@@ -19,7 +19,7 @@ well-structured claim to be checked against other sources, not as ground truth.
 | `ts` | UTC timestamp, taken when the event was drafted |
 | `type` | One of the types below |
 | `task_id`, `agent_id`, `parent_task_id` | Set for task-scoped events |
-| `correlation` | Extra keys; `action_hash` on every action and tool event |
+| `correlation` | Extra keys; `action_hash` on every action and tool event that has an Action |
 | `payload` | Type-specific, below |
 | `prev_hash` | `hash` of the previous event in the run, or 64 zeros for the first |
 | `hash` | `sha256(prev_hash + canonical_json(all fields except hash))` |
@@ -30,13 +30,18 @@ Canonical JSON: sorted keys, `(",", ":")` separators, UTF-8, no NaN, UTC timesta
 ## Ordering guarantees
 
 - `run.created`, `task.created`, `run.started` come first, in that order.
-- Every tool call from the model ends in exactly one of: `tool.completed`, `tool.failed` with
-  `will_retry: false`, `action.refused`, or `action.in_doubt`.
+- In a run that continues, every tool call from the model ends in exactly one of:
+  `tool.completed`, `tool.failed` with `will_retry: false`, or `action.refused`. When a fatal error
+  ends the run in the middle of a call (loop detected, grant expired, missing credential, budget,
+  kill), the call has no ending event of its own: the run's `task.failed` is its ending, and if
+  the call had started, an `action.in_doubt` precedes it.
 - `tool.started` is always preceded by `action.authorized` with the same `action_hash`, and by a
   `budget.consumed` for `tool_calls`.
 - `model.requested` is always preceded by `budget.consumed` for `model_calls`.
 - A failed or cancelled run emits `action.in_doubt` for every started, unfinished action before
-  `task.failed` or `task.cancelled`.
+  `task.failed` or `task.cancelled`, including on the `internal_error` path where possible.
+- `tool.completed` with `is_error: true` means the tool ran. Output that failed the tool's
+  output schema is withheld, and the content says the action took effect.
 - The last event of a finished run is `run.completed`, `run.failed` or `run.cancelled`.
 
 ## Types
@@ -80,7 +85,11 @@ Fatal: `config_error`, `budget_exceeded`, `deadline_exceeded`, `killed`, `loop_d
 `model_request_rejected`, `context_exhausted`, `final_output_invalid`, `internal_error`.
 
 Retryable, and fatal once retries run out: `model_timeout`, `model_unavailable`, `rate_limited`,
-`malformed_model_response`.
+`malformed_model_response`. When one of these ends a run, `run.failed` records the error's own
+disposition, `retryable`, so the record shows it was retried and not refused outright.
+
+Configuration and integrity errors that can also end a run: `no_model_binding`,
+`invalid_transition`, `concurrent_append`.
 
 Tool errors reported to the model: `tool_failed`, `tool_timeout`, `tool_retryable`,
-`invalid_tool_output`.
+`invalid_tool_output` (appears inside `tool.completed` content, see above).

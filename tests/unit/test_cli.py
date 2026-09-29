@@ -142,3 +142,18 @@ def test_agent_yaml_maps_to_the_spec() -> None:
     assert spec.name == "notes-assistant"
     assert [str(c) for c in spec.capabilities] == ["files.read:notes/**", "files.write:out/**"]
     assert spec.budget.steps == 10
+
+
+def test_template_tools_refuse_symlink_escape(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(project)
+    link = project / "workspace" / "notes" / "meeting.md"
+    link.unlink()
+    link.symlink_to(project / "workspace" / "private" / "salaries.md")
+    _, out = cli(project, "run", "agents/assistant.yaml", "x", "--json")
+    run_id = json.loads(out)["run_id"]
+    _, events = cli(project, "inspect", run_id, "--json")
+    failed = [json.loads(line) for line in events.splitlines() if '"tool.failed"' in line]
+    assert any("goes through a link" in e["payload"]["message"] for e in failed)
+    assert "outside the agent's grant" not in events

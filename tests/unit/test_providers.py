@@ -188,6 +188,15 @@ class TestOpenAICompat:
         with pytest.raises(MalformedModelResponse):
             await openai(rec).generate(request())
 
+    async def test_non_finite_numbers_are_malformed(self) -> None:
+        body = '{"choices": [{"message": {"tool_calls": [{"id": "x", "function": {"name": "t", "arguments": "{\\"a\\": NaN}"}}]}}]}'
+        rec = Recorder(httpx.Response(200, text=body))
+        with pytest.raises(MalformedModelResponse):
+            await openai(rec).generate(request())
+        rec = Recorder(httpx.Response(200, text='{"content": [], "x": Infinity}'))
+        with pytest.raises(MalformedModelResponse):
+            await anthropic(rec).generate(request())
+
     async def test_structured_output_and_options(self) -> None:
         rec = Recorder(httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]}))
         await openai(rec).generate(

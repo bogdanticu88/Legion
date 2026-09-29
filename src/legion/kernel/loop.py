@@ -10,6 +10,7 @@ from typing import NoReturn
 
 import jsonschema
 
+from legion.canonical import canonical_json
 from legion.domain.agent import ModelFeature
 from legion.domain.budget import Dimension
 from legion.domain.errors import (
@@ -17,7 +18,9 @@ from legion.domain.errors import (
     DeadlineExceeded,
     Disposition,
     FinalOutputInvalid,
+    GrantExpired,
     LegionError,
+    MalformedModelResponse,
 )
 from legion.events import types as ev
 from legion.events.types import EventType
@@ -49,8 +52,11 @@ class AgentLoop:
                 return
 
     async def _step(self, task: TaskRuntime) -> None:
-        if task.deadline is not None and self.k.now() >= task.deadline:
+        now = self.k.now()
+        if task.deadline is not None and now >= task.deadline:
             raise DeadlineExceeded(f"task {task.task_id} passed its deadline")
+        if task.grant.expired(now):
+            raise GrantExpired(f"grant {task.grant.id} has expired")
         await self._charge_before(task, Dimension.STEPS)
 
     def _request(self, task: TaskRuntime) -> ModelRequest:
@@ -110,6 +116,10 @@ class AgentLoop:
             started = time.monotonic()
             try:
                 response = await task.model.provider.generate(request)
+                try:
+                    canonical_json(response.message.model_dump(mode="json"))
+                except ValueError as exc:
+                    raise MalformedModelResponse(f"response cannot be recorded: {exc}") from exc
             except LegionError as exc:
                 retry = exc.disposition is Disposition.RETRYABLE and (
                     attempt < self.k.retry.max_attempts

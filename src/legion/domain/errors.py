@@ -1,4 +1,7 @@
-"""Every Legion error carries one disposition. The loop acts on the disposition, never the type."""
+"""Every Legion error carries one disposition. The loop acts on the disposition, never the type.
+
+Phase 2 adds a fourth disposition, escalate, for errors that pause the run for a human.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +13,6 @@ class Disposition(StrEnum):
     RETRYABLE = "retryable"
     RECOVERABLE = "recoverable"
     FATAL = "fatal"
-    ESCALATE = "escalate"
 
 
 class LegionError(Exception):
@@ -167,11 +169,6 @@ class BudgetExceeded(LegionError):
 
 class Killed(LegionError):
     code = "killed"
-
-
-class OutputRejected(LegionError):
-    code = "output_rejected"
-    disposition = Disposition.RECOVERABLE
 
 
 class DeadlineExceeded(LegionError):

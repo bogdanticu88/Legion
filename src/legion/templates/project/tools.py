@@ -30,10 +30,16 @@ def _workspace(ctx: ToolContext) -> Path:
 
 
 def _inside(ctx: ToolContext, relative: str) -> Path:
+    """Resolve a path and refuse it unless it lands exactly where the capability check looked.
+
+    Capability matching is lexical. A symlink at notes/x pointing to private/y would pass the
+    check for files.read:notes/** and then read private/y, so the resolved location must equal
+    the lexical one.
+    """
     root = _workspace(ctx)
     target = (root / relative).resolve()
-    if not target.is_relative_to(root):
-        raise ValueError("path leaves the workspace")
+    if not target.is_relative_to(root) or target.relative_to(root).as_posix() != relative:
+        raise ValueError("path leaves the workspace or goes through a link")
     return target
 
 

@@ -48,7 +48,7 @@ from legion.domain.errors import (
 from legion.domain.messages import ToolCallPart
 from legion.events import types as ev
 from legion.events.types import EventType
-from legion.kernel.services import Kernel, TaskRuntime
+from legion.kernel.services import Kernel, TaskRuntime, redact_text
 from legion.tools.base import Tool, ToolContext, ToolResult
 
 REPEAT_REFUSE_AT = 3
@@ -100,6 +100,7 @@ class ActionPipeline:
                 ev.ActionRepeated(
                     call_id=call.id, tool=call.name, repeat_key=action.repeat_key, count=count
                 ),
+                correlation={"action_hash": action.hash},
             )
             if count >= REPEAT_FATAL_AT:
                 raise LoopDetected(f"{call.name} called {count} times with identical arguments")
@@ -136,15 +137,20 @@ class ActionPipeline:
             raise InvalidArguments(
                 f"cannot determine what this call acts on ({type(exc).__name__})"
             ) from exc
-        return Action(
-            tool=spec.name,
-            arguments=call.arguments,
-            resource=resource,
-            required=tuple(Capability(name=n, resource=resource) for n in spec.capabilities),
-            effect=spec.effect,
-            grant_id=task.grant.id,
-            task_id=task.task_id,
-        )
+        try:
+            action = Action(
+                tool=spec.name,
+                arguments=call.arguments,
+                resource=resource,
+                required=tuple(Capability(name=n, resource=resource) for n in spec.capabilities),
+                effect=spec.effect,
+                grant_id=task.grant.id,
+                task_id=task.task_id,
+            )
+            action.hash  # noqa: B018 - canonicalization rejects NaN and similar before anything runs
+        except ValueError as exc:
+            raise InvalidArguments(f"arguments cannot be checked: {exc}") from exc
+        return action
 
     async def _authorize(
         self, call: ToolCallPart, action: Action, task: TaskRuntime
@@ -187,7 +193,9 @@ class ActionPipeline:
                 raise CredentialUnavailable(
                     f"tool {tool.spec.name} needs credential {name!r}, which is not configured"
                 )
-            out[name] = await self.k.credentials.resolve(ref)
+            secret = await self.k.credentials.resolve(ref)
+            self.k.recorder.remember(secret.reveal())
+            out[name] = secret
         return out
 
     async def _run(
@@ -242,7 +250,7 @@ class ActionPipeline:
                 error = ToolFailed(f"{type(exc).__name__}: {exc}")
 
             if error is not None:
-                message = _redact(error.message, secrets)[0]
+                message = self.k.recorder.redact(error.message)
                 timed_out_write = isinstance(error, ToolTimeout) and not spec.effect.safe_to_repeat
                 if isinstance(error, ActionInDoubt) or timed_out_write:
                     await self.k.emit(
@@ -310,26 +318,20 @@ class ActionPipeline:
             try:
                 jsonschema.validate(result.data, output_schema)
             except jsonschema.ValidationError as exc:
-                bad = InvalidToolOutput(
-                    f"{action.tool} returned output that fails its schema: {exc.message}"
-                )
-                await self.k.emit(
-                    task,
-                    EventType.TOOL_FAILED,
-                    ev.ToolFailed(
-                        call_id=call.id,
-                        action_hash=action.hash,
-                        attempt=attempt,
-                        error_code=bad.code,
-                        message=bad.message,
-                        disposition=bad.disposition.value,
-                        will_retry=False,
+                # The tool ran, so this is not a failure to act: saying "failed" would invite the
+                # model to repeat a write. The output is withheld because it cannot be trusted,
+                # and the validator message is left out because it quotes the offending value.
+                where = "/".join(str(p) for p in exc.absolute_path) or "output"
+                result = ToolResult(
+                    content=(
+                        f"{action.tool} ran, but its output does not match its declared schema "
+                        f"(at {where}), so it is withheld. The action itself has taken effect; "
+                        f"do not repeat it on this basis. [{InvalidToolOutput.code}]"
                     ),
-                    correlation,
+                    is_error=True,
                 )
-                return
 
-        content, redactions = _redact(result.for_model(), secrets)
+        content, redactions = redact_text(result.for_model(), self.k.recorder.secrets)
         artifact = None
         truncated = False
         limit = tool.spec.max_output_chars
@@ -387,13 +389,3 @@ def exceeded_payload(task: TaskRuntime, exc: BudgetExceeded) -> ev.BudgetExceede
         limit=Decimal(str(exc.limit)),
         attempted=Decimal(str(exc.attempted)),
     )
-
-
-def _redact(text: str, secrets: dict[str, Secret]) -> tuple[str, int]:
-    count = 0
-    for secret in secrets.values():
-        value = secret.reveal()
-        if len(value) >= 4 and value in text:
-            count += text.count(value)
-            text = text.replace(value, "[redacted]")
-    return text, count

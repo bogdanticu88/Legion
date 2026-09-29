@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -202,15 +204,18 @@ class Legion:
         if task.deadline is not None:
             until_deadline = (task.deadline - self.now()).total_seconds()
             timeout = until_deadline if timeout is None else min(timeout, until_deadline)
+        started = time.monotonic()
         try:
             try:
                 async with asyncio.timeout(timeout):
                     await AgentLoop(kernel).run(task)
             except TimeoutError:
                 await _mark_in_doubt(kernel, task, "run stopped by its time limit")
-                if task.deadline is not None and self.now() >= task.deadline:
+                deadline_hit = task.deadline is not None and self.now() >= task.deadline
+                if limit is None or deadline_hit:
                     raise DeadlineExceeded(f"task {task.task_id} passed its deadline") from None
-                exceeded = BudgetExceeded(Dimension.WALL_SECONDS.value, limit, limit)
+                elapsed = round(time.monotonic() - started, 3)
+                exceeded = BudgetExceeded(Dimension.WALL_SECONDS.value, limit, elapsed)
                 await kernel.emit(task, EventType.BUDGET_EXCEEDED, exceeded_payload(task, exceeded))
                 raise exceeded from None
         except LegionError as exc:
@@ -227,6 +232,8 @@ class Legion:
             await kernel.recorder.emit(EventType.RUN_CANCELLED, ev.Cancelled(reason="cancelled"))
             raise
         except Exception as exc:
+            with contextlib.suppress(Exception):
+                await _mark_in_doubt(kernel, task, f"internal error: {type(exc).__name__}")
             failure = ev.Failure(
                 error_code="internal_error",
                 message=f"{type(exc).__name__}: {exc}",

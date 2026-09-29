@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from legion.access.secrets import CredentialResolver, SecretRef
 from legion.artifacts import ArtifactStore
@@ -37,10 +40,24 @@ class RetryPolicy:
 
 @dataclass
 class Recorder:
-    """The one way to change run state: append an event, then apply it."""
+    """The one way to change run state: append an event, then apply it.
+
+    Every payload passes through redaction of the secret values resolved during the run, so no
+    error path can carry a credential into the log. The append is shielded from cancellation:
+    if the store committed the event, the state must see it, or the next append would be
+    refused and the run would end without a terminal event.
+    """
 
     store: EventStore
     state: RunState
+    secrets: set[str] = field(default_factory=set)
+
+    def remember(self, value: str) -> None:
+        if len(value) >= MIN_SECRET_LENGTH:
+            self.secrets.add(value)
+
+    def redact(self, text: str) -> str:
+        return redact_text(text, self.secrets)[0]
 
     async def emit(
         self,
@@ -61,9 +78,41 @@ class Recorder:
             parent_task_id=parent_task_id,
             correlation=correlation,
         )
-        [event] = await self.store.append([new], expected_seq=self.state.last_seq)
+        if self.secrets:
+            new = new.model_copy(update={"payload": _redact_tree(new.payload, self.secrets)})
+        pending = asyncio.ensure_future(self.store.append([new], expected_seq=self.state.last_seq))
+        try:
+            [event] = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            [event] = await pending
+            self.state.apply(event)
+            raise
         self.state.apply(event)
         return event
+
+
+MIN_SECRET_LENGTH = 4
+
+
+def redact_text(text: str, secrets: set[str] | list[str]) -> tuple[str, int]:
+    """Replace secret values, including their JSON-escaped form, with a marker."""
+    count = 0
+    for value in secrets:
+        for form in {value, json.dumps(value)[1:-1]}:
+            if form and form in text:
+                count += text.count(form)
+                text = text.replace(form, "[redacted]")
+    return text, count
+
+
+def _redact_tree(value: Any, secrets: set[str]) -> Any:
+    if isinstance(value, str):
+        return redact_text(value, secrets)[0]
+    if isinstance(value, dict):
+        return {k: _redact_tree(v, secrets) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_tree(v, secrets) for v in value]
+    return value
 
 
 @dataclass

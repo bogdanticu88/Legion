@@ -1,6 +1,7 @@
 """Every step of the action pipeline, exercised through a real run on the scripted provider."""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -293,21 +294,23 @@ async def test_large_output_goes_to_an_artifact() -> None:
     assert len(done["content"]) < 300
 
 
-async def test_output_schema_is_enforced() -> None:
+async def test_output_schema_failure_withholds_output_but_admits_the_effect() -> None:
     @tool(
-        effect=EffectClass.READ,
-        capabilities=["files.read"],
-        resource=lambda a: "docs/y",
-        output_schema={"type": "object", "required": ["count"]},
+        effect=EffectClass.WRITE,
+        capabilities=["files.write"],
+        resource=lambda a: "out/y",
+        output_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
     )
     async def counted(args: Empty, ctx: ToolContext) -> ToolResult:
         """Should return a count."""
-        return ToolResult(data={"total": 3})
+        return ToolResult(data={"count": "private-value-123"})
 
     h = build([call("counted", {}), reply("ok")], extra_tools=[counted])
-    outcome = await h.run(agent(tools=["counted"], capabilities=["files.read:docs/**"]))
-    [failed] = await h.payloads(outcome.run_id, E.TOOL_FAILED)
-    assert failed["error_code"] == "invalid_tool_output"
+    outcome = await h.run(agent(tools=["counted"], capabilities=["files.write:out/**"]))
+    [done] = await h.payloads(outcome.run_id, E.TOOL_COMPLETED)
+    assert done["is_error"] is True
+    assert "has taken effect" in done["content"]
+    assert "private-value-123" not in json.dumps(await h.payloads(outcome.run_id, E.TOOL_COMPLETED))
 
 
 async def test_parallel_calls_in_one_turn_run_in_order() -> None:
@@ -342,3 +345,82 @@ async def test_crashing_resource_function_refuses_instead_of_crashing() -> None:
     [refused] = await h.payloads(outcome.run_id, E.ACTION_REFUSED)
     assert refused["reason_code"] == "invalid_arguments"
     assert E.TOOL_STARTED not in await h.types(outcome.run_id)
+
+
+@pytest.mark.parametrize("path", ["docs/a\u0000b", "docs/a\x00.md"])
+async def test_unrecordable_resource_is_refused(path: str) -> None:
+    h = build([call("read_file", {"path": path}), reply("ok")])
+    outcome = await h.run()
+    assert outcome.status is RunStatus.COMPLETED
+    [refused] = await h.payloads(outcome.run_id, E.ACTION_REFUSED)
+    assert refused["reason_code"] == "invalid_arguments"
+
+
+async def test_nan_in_arguments_is_refused() -> None:
+    h = build([call("read_file", {"path": "docs/a.md", "x": float("nan")}), reply("ok")])
+    outcome = await h.run()
+    assert outcome.status is RunStatus.COMPLETED
+    assert (await h.store.verify(outcome.run_id)).ok
+
+
+def fatal_secret_tool() -> Any:
+    from legion.domain.errors import ActionInDoubt
+
+    @tool(
+        effect=EffectClass.WRITE,
+        capabilities=["api.write"],
+        resource=lambda a: "x",
+        credentials=["api_token"],
+    )
+    async def leaky(args: Empty, ctx: ToolContext) -> str:
+        """Fails fatally and puts its credential in the message."""
+        raise ActionInDoubt(f"gave up with token {ctx.credentials['api_token'].reveal()}")
+
+    return leaky
+
+
+async def test_secret_in_a_fatal_error_is_redacted_everywhere(tmp_path: Path) -> None:
+    sentinel = "sk-test-FATAL-77aa11"
+    store = SqliteEventStore(tmp_path / "e.db")
+    h = build(
+        [call("leaky", {}), reply("never")],
+        extra_tools=[fatal_secret_tool()],
+        store=store,
+        credentials=EnvResolver({"API_TOKEN": sentinel}),
+        credential_bindings={"api_token": SecretRef.parse("env:API_TOKEN")},
+        grantable=("api.write",),
+    )
+    outcome = await h.run(agent(tools=["leaky"], capabilities=["api.write"]))
+    assert outcome.error_code == "action_in_doubt"
+    assert sentinel not in (outcome.error_message or "")
+    store.close()
+    for path in tmp_path.iterdir():
+        assert sentinel.encode() not in path.read_bytes(), path
+
+
+async def test_cancelled_run_still_ends_with_a_terminal_event() -> None:
+    started = asyncio.Event()
+
+    @tool(
+        effect=EffectClass.WRITE,
+        capabilities=["files.write"],
+        resource=lambda a: "out/x",
+        timeout_s=30,
+    )
+    async def hang(args: Empty, ctx: ToolContext) -> str:
+        """Hangs until cancelled."""
+        started.set()
+        await asyncio.sleep(30)
+        return "late"
+
+    h = build([call("hang", {}), reply("never")], extra_tools=[hang])
+    running = asyncio.create_task(h.run(agent(tools=["hang"], capabilities=["files.write:out/**"])))
+    await started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    [run_summary] = await h.store.runs()
+    types = await h.types(run_summary.run_id)
+    assert types[-1] is E.RUN_CANCELLED
+    assert E.ACTION_IN_DOUBT in types
+    assert (await h.store.verify(run_summary.run_id)).ok
