@@ -4,20 +4,18 @@
 
 ### Phase 1
 
-- Kernel: agent loop, action pipeline, runtime facade. Every tool call passes one ordered
-  pipeline with no hooks between steps.
-- Authority: capabilities with resource globs, grants with attenuation (property-tested ahead of
-  delegation), rule-table policy with deny precedence, budget ledger over steps, model calls, tool
-  calls, tokens, cost and wall clock.
-- Events: append-only SQLite and in-memory stores, per-run SHA-256 hash chain, projections that
-  rebuild run state, transcript and budget from the log.
-- Providers: OpenAI-compatible and Anthropic adapters over httpx, scripted provider for tests.
-  API-key and no-auth access. Secrets as references, redacted from tool output.
-- Failure model: one disposition per error, bounded retries with backoff charged to the budget,
-  repeat detection, effect-class-aware tool retries, in-doubt recording for interrupted writes.
+- Agent loop, action pipeline and runtime. Every tool call goes through the pipeline.
+- Capabilities with resource globs, grants with `attenuate` (tested ahead of delegation),
+  rule-table policy, budgets for steps, model calls, tool calls, tokens, cost and wall clock.
+- Append-only event log in SQLite or memory, hash-chained per run. Run state, transcript and
+  budget use are rebuilt from it.
+- OpenAI-compatible and Anthropic adapters on httpx, plus a scripted provider. API key or no auth.
+  Secrets stay as references and get scrubbed from events and tool output.
+- Retries with backoff charged to the budget, repeat detection, tool retries only where the effect
+  class allows, and in-doubt records for interrupted writes.
 - CLI: `init`, `providers`, `agent validate`, `run`, `runs`, `inspect`, `verify`.
-- Tests: unit, conformance (Hypothesis invariants), optional real-model integration tests.
+- Unit tests, Hypothesis invariant tests, optional real-model tests.
 
 ### Phase 0
 
-- Assessment, architecture, ADRs 0001 to 0012, threat model, roadmap.
+- Framework notes, architecture, ADRs 0001 to 0012, threat model, roadmap.

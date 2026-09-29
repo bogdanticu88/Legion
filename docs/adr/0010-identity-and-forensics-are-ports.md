@@ -1,27 +1,26 @@
-# ADR 0010: NIA, MIA and forensics are ports, not modules
+# ADR 0010: NIA, MIA and forensics stay outside
 
 Status: accepted
 
 ## Context
 
-NIA (a Go control plane with a gateway, credentials, kill switch and risk scoring) and MIA (a
-Python mandate and delegation service) already cover identity and cross-run authority. A
-separate forensics project will reconstruct incidents. Rebuilding any of them inside Legion
-would duplicate work and blur the security boundary.
+NIA (Go: gateway, credentials, kill switch, risk scoring) and MIA (Python: mandates and
+delegation) already cover identity and authority across runs. A separate forensics project will
+reconstruct incidents. Rebuilding any of that inside Legion would duplicate them and blur who's
+responsible for what.
 
 ## Decision
 
-Legion enforces inside one run: task grants, the ledger, approvals. External authorities are
-reached through `IdentityPort` (agent identity, credentials, external authorization, kill state,
-delegation notification, evidence references). The effective permission is Legion's grant
-intersected with the external decision. Legion never mints identity credentials and never scores
-risk across runs. Legion must work with no identity service at all.
+Legion only enforces inside a run: task grants, budget, approvals. Everything else goes through
+`IdentityPort` (identity, credentials, external authorization, kill state, delegation, evidence).
+An action needs both Legion's grant and the external service to allow it. Legion never issues
+identity credentials, never scores risk across runs, and works with no identity service at all.
 
-For forensics, Legion only emits well-formed, chained events and documents that they are the
-harness's own account.
+For forensics Legion just writes good, chained events and says clearly that they're its own
+account.
 
 ## Consequences
 
-- A NIA adapter can also route tool execution through NIA's gateway, so bypassing Legion does not
-  bypass NIA.
-- The ports exist in Phase 1 as protocols with a null implementation; adapters come in Phase 7.
+- A NIA adapter can also send tool calls through NIA's gateway, so getting around Legion doesn't
+  get around NIA.
+- Phase 1 has the interface and a null implementation; adapters come in Phase 7.

@@ -1,21 +1,21 @@
-# ADR 0009: MCP is a tool adapter with operator-owned manifests
+# ADR 0009: MCP is a tool adapter with an operator-owned manifest
 
-Status: accepted (implementation in Phase 5)
+Status: accepted (built in Phase 5)
 
 ## Context
 
-MCP is the common way to reach tools, but a server's own description of its tools is untrusted
-input that ends up in the prompt, and servers can change descriptions after they are approved.
+MCP is how most people will connect tools, but a server's description of its own tools is
+untrusted text that goes into the prompt, and it can change after you've approved it.
 
 ## Decision
 
-MCP tools enter Legion through an adapter that implements the ordinary `Tool` protocol. An
-operator-owned manifest supplies each tool's effect class, required capabilities, resource
-argument and a pinned hash of the server's name, description and schema. A tool without a manifest
-entry is not registered. A changed hash blocks the tool until the operator re-pins it. MCP never
-becomes the internal architecture.
+MCP tools come in through an adapter that implements the normal `Tool` protocol. The operator
+writes a manifest that gives each tool its effect class, required capabilities, resource argument
+and a pinned hash of the server's name, description and schema. Tools without a manifest entry
+aren't registered, and a changed hash blocks the tool until the operator re-pins it. MCP doesn't
+become Legion's internal model.
 
 ## Consequences
 
-- Governance of an MCP server extends exactly as far as its manifest.
-- Rug-pull changes are caught at connection time, not after use.
+- An MCP server is governed only as far as its manifest says.
+- Description changes are caught when connecting, before the tool is used.

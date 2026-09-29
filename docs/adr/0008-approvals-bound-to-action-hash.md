@@ -1,21 +1,20 @@
-# ADR 0008: Approvals are bound to a canonical action hash
+# ADR 0008: Approvals are tied to the action hash
 
-Status: accepted (implementation in Phase 2)
+Status: accepted (built in Phase 2)
 
 ## Context
 
-An approval recorded against a tool name lets the approved call be replayed with different
-arguments.
+If an approval is recorded against a tool name, the same tool can then run with different
+arguments under that approval.
 
 ## Decision
 
-An `Action` has a canonical form (tool, validated arguments, resource, grant id, task id) and a
-SHA-256 over its canonical JSON. An approval records the hash, the approver, the time, the scope
-(single use) and an expiry. Execution checks that the hash of the action about to run equals the
-approved hash, and that the approval has not been used or expired. Until Phase 2, configuration
-that could require approval is rejected at load time.
+An `Action` has a canonical form (tool, arguments, resource, grant id, task id) and a SHA-256 of it.
+An approval stores that hash, who approved, when, and an expiry, and can be used once. Before
+running, Legion checks the action's hash matches and the approval is unused and not expired. Until
+Phase 2, config that could need an approval fails to load.
 
 ## Consequences
 
-- Changing any argument after approval invalidates it.
-- Approval needs durable pause, which is why it ships with persistence and not before.
+- Changing any argument after approval means asking again.
+- Approvals need a run that can pause, which is why they come with crash recovery.

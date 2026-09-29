@@ -1,26 +1,24 @@
 # ADR 0006: Subscription SDKs are external runtimes, not model providers
 
-Status: accepted (implementation in Phase 4)
+Status: accepted (built in Phase 4)
 
 ## Context
 
-Subscription-backed access with official programmatic support exists in 2026 through the GitHub
-Copilot SDK, the Claude Agent SDK and the Codex app-server. Each of them runs its own agent loop
-and executes tools itself. Wrapping one as a `ModelProvider` would hand tool execution to a loop
-Legion does not control while the events still claimed Legion enforced it.
+In 2026 the GitHub Copilot SDK, the Claude Agent SDK and the Codex app-server are the official ways
+to use a subscription programmatically. Each of them runs its own agent loop and its own tools. If
+I wrapped one as a `ModelProvider`, its tools would run outside Legion while the events suggested
+Legion had checked them.
 
-Credential scraping, cookie extraction and undocumented consumer endpoints are out of scope,
-permanently.
+Scraping sessions or cookies, or calling undocumented consumer endpoints, is off the table for good.
 
 ## Decision
 
-These SDKs will be supported as an `ExternalAgentRuntime` that a task can delegate to. Each
-declares a guarantee level: which Legion tools it may call back into, whether its own built-in
-tools are disabled, and whether its actions are visible to Legion. Events mark every result that
-came from an external runtime. Only documented authentication paths are used, and per-user
-subscription access is documented as per-user.
+They'll be supported as an `ExternalAgentRuntime` that a task can hand work to. Each one declares
+what Legion can and can't see or control (which Legion tools it can call back into, whether its
+own tools are switched off). Events mark results that came from one. Only documented auth is used,
+and per-user subscription access is documented as per-user.
 
 ## Consequences
 
-- Legion's enforcement claims stay true.
-- Users of those subscriptions get a supported path with its limits written down.
+- What Legion claims to enforce stays true.
+- People with those subscriptions get a supported way in, with the limits written down.

@@ -1,24 +1,21 @@
-# ADR 0004: One action pipeline, no middleware
+# ADR 0004: One pipeline for every tool call
 
 Status: accepted
 
 ## Context
 
-Governance implemented as optional middleware or callbacks can be skipped, reordered, or
-bypassed by a tool that calls another tool directly. NIA made the same point for its gateway:
-one decision function behind every entry point, because two copies drift.
+When governance is middleware or callbacks, it can be skipped, called in the wrong order, or
+avoided by a tool that calls another tool directly. NIA ran into the same thing with its gateway
+and ended up with one decision function behind every entry point.
 
 ## Decision
 
-Every tool call becomes an `Action` and passes `ActionPipeline.execute`, which runs a fixed order:
-kill check, lookup, offered-tool check, schema validation, repeat detection, grant, policy,
-budget, credential resolution, execution with timeout and bounded retry, output validation and
-redaction, events. There are no hooks that can skip a step. Extension points are the ports the
-steps call (policy, identity, credentials), not insertion points between steps.
+Every tool call becomes an `Action` and goes through `ActionPipeline.execute` in a fixed order
+(listed in ARCHITECTURE.md). There are no hooks between steps. To change behaviour you swap what a
+step calls (policy, identity port, credential resolver), not the steps.
 
 ## Consequences
 
 - Reviewing enforcement means reading one function.
-- Tools get a `ToolContext` with their declared credentials and nothing that reaches the kernel,
-  so a tool cannot call another tool around the pipeline through Legion. It can still do anything
-  Python can; see the threat model.
+- Tools get a `ToolContext` with their credentials and nothing else, so they can't call other tools
+  through Legion. They can still do anything Python can.

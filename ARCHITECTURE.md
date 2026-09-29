@@ -1,223 +1,201 @@
 # Architecture
 
-Legion is a library with a CLI. It runs in one process, uses asyncio, and needs no services
-beyond the model endpoint you point it at. This document describes the full design. Sections
-marked with a phase describe work that is not built yet; see [docs/roadmap.md](docs/roadmap.md).
+Legion is a Python library with a CLI. It runs in one process on asyncio and stores its events in
+SQLite. The only external thing it talks to is the model endpoint. Parts marked with a phase
+aren't built yet; see [docs/roadmap.md](docs/roadmap.md).
 
 ## Layers
 
 ```
-MODEL        inference: a remote API, an enterprise gateway, or a local server
-AGENT        a declarative spec: instructions, tools, requested capabilities, budget
-HARNESS      Legion: runs agents, owns every effect, records every transition
-APPLICATION  your code: defines agents and tools, starts runs, uses results
+MODEL        remote API, gateway or local server
+AGENT        spec: instructions, tools, capabilities, budget
+HARNESS      Legion: runs the agent, checks and records every action
+APPLICATION  your code: defines agents and tools, starts runs
 ```
 
-The harness never imports application code except through the tool and agent interfaces, and
-nothing in `src/legion` knows what domain it is running in. The security-operations example
-lives in `examples/`, not in the package.
+`src/legion` has no domain logic in it. Examples (including the planned security one) live under
+`examples/`.
 
-## Components
+## Main pieces
 
 ```
-            ┌────────────────────────── Legion (one process) ──────────────────────────┐
-            │                                                                           │
- legion run │  Runtime ── builds Run, root Task, root Grant; resolves model binding      │
- ──────────▶│     │                                                                     │
-            │     ▼                                                                     │
-            │  AgentLoop (per task)                                                     │
-            │     context ──▶ model call ──▶ ModelProvider adapter ──▶ model endpoint   │
-            │        ▲             │ (retries, budget, events)                           │
-            │        │             ▼                                                     │
-            │        │        tool calls                                                 │
-            │        │             │                                                     │
-            │        │             ▼                                                     │
-            │        │     ActionPipeline  ◀── the only code path that causes effects    │
-            │        │      1 kill check          6 budget                               │
-            │        │      2 lookup + offered    7 credentials                          │
-            │        │      3 schema              8 execute (timeout, bounded retry)     │
-            │        │      4 repeat detection    9 output check, redaction              │
-            │        │      5 grant + policy     10 events                               │
-            │        └──── tool result ◀─┘                                               │
-            │                                                                           │
-            │  EventStore (append-only, per-run hash chain)    ArtifactStore (sha256)   │
-            └───────────────────────────────────────────────────────────────────────────┘
-               ports: ModelProvider, AccessProvider, CredentialResolver, Tool,
-                      PolicyDecisionPoint, IdentityPort, EventStore
+legion run
+    │
+Runtime            builds the run, root task and grant, picks the model
+    │
+AgentLoop          ask model ─▶ tool calls ─▶ pipeline ─▶ results ─▶ ask model ...
+    │                  │                          │
+    │           ModelProvider                ActionPipeline ─▶ Tool
+    │
+EventStore         append-only, hash chain per run
+    │
+RunState           statuses, transcript, budget use, in-flight actions (all from events)
 ```
 
-## Core types
+Ports (swap the implementation, keep the interface): `ModelProvider`, `AccessProvider`,
+`CredentialResolver`, `Tool`, `PolicyDecisionPoint`, `IdentityPort`, `EventStore`,
+`ArtifactStore`.
 
-| Type | What it is | Mutable? |
+The types worth knowing:
+
+- `AgentSpec`: the agent definition. Immutable.
+- `TaskSpec`: objective, context, constraints, deadline. Task status lives in the events.
+- `ToolSpec`: schema, required capabilities, effect class, timeout, credential names.
+- `Action`: one proposed tool call in canonical form, plus its hash.
+- `Grant`: capabilities, budget limits, identity, expiry. Immutable.
+- `RunState`: rebuilt from events, never edited directly.
+
+## The pipeline
+
+`ActionPipeline.execute` in `kernel/pipeline.py` handles every tool call, in this order:
+
+1. kill check (through `IdentityPort`)
+2. tool exists and the agent was given it
+3. arguments match the schema, resource extracted
+4. repeat check: third identical call refused, fifth ends the run
+5. grant covers the required capabilities
+6. policy
+7. external authority (`IdentityPort.authorize`)
+8. credentials resolved
+9. tool-call budget
+10. kill check again, then run with timeout and retries
+11. output schema, secret redaction, size limit
+
+Each step writes events. There are no hooks between steps. The extension points are the things
+the steps call (policy, identity port, credential resolver).
+
+## Effect classes
+
+Every tool declares one:
+
+| Class | Retried on timeout? | After a crash (Phase 2) |
 |---|---|---|
-| `AgentSpec` | Name, instructions, model requirement, tool names, requested capabilities, budget, optional output schema | No |
-| `TaskSpec` | Objective, context, constraints, parent, creator, deadline | No; task status lives in the event log and changes only through a transition table |
-| `RunState` | Projection of one run's events: statuses, transcripts, consumption, in-flight actions | Only by applying events |
-| `ToolSpec` | Name, description, input and output schema, required capabilities, effect class, timeout, credential names | No |
-| `Action` | One proposed tool call in canonical form, with its hash | No |
-| `Grant` | Capabilities, budget limits, identity context, expiry, parent grant | No; derive a narrower one with `attenuate` |
-| `Ledger` | What a grant's budget has consumed | Append-only, rebuilt from events |
-| `Decision` | Policy output: allow, deny, or require approval, with reasons | No |
-| `Event` | One recorded transition, chained by hash | Never |
+| `pure` | yes | re-run |
+| `read` | yes | re-run |
+| `write_idempotent` | yes | re-run |
+| `write` | no, marked in doubt | ask a human |
+| `external_irreversible` | no | ask a human; denied by default policy for now |
 
-### Effect classes
+## Capabilities and grants
 
-Every tool declares one. The class decides retries, default policy and, from Phase 2, what
-happens after a crash.
+A capability is `name[:resource]`, e.g. `files.read:notes/**`. `*` matches inside one path
+segment and `**` matches across them. A grant with no resource covers any resource for that name,
+and a trailing `.*` on the name covers anything under it. If a tool needs a resource-limited
+capability but didn't say which resource it touches, the check fails. Resources containing `..`
+never match.
 
-| Class | Meaning | Retry on timeout | After a crash (Phase 2) |
-|---|---|---|---|
-| `pure` | No external effect | Yes | Re-run |
-| `read` | Reads external state | Yes | Re-run |
-| `write_idempotent` | Writes, safe to repeat with the same key | Yes | Re-run with the same key |
-| `write` | Writes, not safe to repeat | No, outcome is in doubt | Escalate to a human |
-| `external_irreversible` | Cannot be undone (send, deploy, pay) | No | Escalate; denied by default policy |
+The run's root grant is whatever the agent asks for, as long as the operator listed it under
+`authority.grantable`.
 
-### Capabilities and grants
+`Grant.attenuate` is the rule for delegation: a child can't get more capabilities, bigger limits
+or a later expiry than its parent. I built and tested it before delegation itself (Phase 3) so
+the rule is settled first. Two gaps remain for Phase 3: it compares the child with the parent's
+limits rather than with what the parent has left, and it doesn't derive the child's identity from
+the parent.
 
-A capability is `name[:resource]`, for example `files.read:notes/**`. A tool lists the capability
-names it needs and, optionally, which argument identifies the resource. A grant covers a
-requirement when the name matches (a trailing `.*` matches any suffix) and either the grant has no
-resource constraint or the requirement's resource matches the grant's glob. A requirement with no
-resource is never covered by a resource-constrained grant, and resources containing `..` segments
-are never covered.
+## Policy
 
-Delegation (Phase 3) derives a child grant with `Grant.attenuate`, which raises unless every
-capability, every budget limit and the expiry are at most the parent's. The function exists and
-is property-tested now so the rule is fixed before delegation is built. Two things it does not
-do yet, both Phase 3: it compares the child's limits with the parent's limits, not with what the
-parent has left, and it accepts any identity context. The delegation step will carve the budget
-from the parent's remaining ledger and derive the child identity from the parent's
-`on_behalf_of` chain rather than accept it from the caller.
-
-### Policy
-
-The pipeline asks a `PolicyDecisionPoint` about every action that the grant already covers.
-Policy can only take authority away. The built-in implementation is a rule table matched on tool
-name, capability and effect class, where any deny wins over any approval requirement, which wins
-over any allow. There is no policy language; OPA, Cedar, NIA or MIA can sit behind the same
-interface later.
-
-In Phase 1 there is no approval flow, so a configuration that could produce `require_approval`
-is rejected at load time rather than silently treated as deny.
+Policy only runs for actions the grant already allows, and it can only say no. The built-in one is
+a list of rules matched on tool name, capability and effect class. Deny beats require-approval,
+which beats allow. OPA, Cedar, NIA or MIA could replace it behind the same interface. There's no
+approval flow yet, so a config that uses `require_approval` fails to load.
 
 ## Events
 
-Events are the source of truth. The run status, the task statuses, the ledger and the transcript
-shown to the model are all projections of the event log, and a test rebuilds them from a stored
-run and compares them with what the live run saw.
+Everything is derived from the event log: run and task status, budget used, the transcript sent to
+the model. The live run applies each event to a `RunState` as it's written, and a test rebuilds
+the same state from storage and compares.
 
-Each event carries `event_id`, `schema_version`, `run_id`, `seq`, `ts`, `type`, `task_id`,
-`agent_id`, `parent_task_id`, a typed `payload`, correlation fields, `prev_hash` and `hash`.
-`hash = sha256(prev_hash + canonical_json(event without hash))`, with a genesis of 64 zeros per
-run, the same scheme MIA uses so one verifier handles both. The SQLite store refuses `UPDATE` and
-`DELETE` with triggers.
+Each event is hashed as `sha256(prev_hash + canonical_json(event without hash))`, starting from 64
+zeros per run. That's the same scheme MIA uses. SQLite triggers block `UPDATE` and `DELETE`.
 
-This is tamper evidence against casual edits, not proof. Whoever controls the host can rewrite the
-whole chain. External anchoring belongs to a separate forensics project, which should treat
-Legion's events as the harness's own account of what happened, not as ground truth.
+This catches edits, not a determined attacker who owns the host and can rewrite the whole chain.
+A forensics tool should treat these events as Legion's own account of what it did.
 
-See [docs/events.md](docs/events.md) for every event type and payload.
+Full list of events: [docs/events.md](docs/events.md).
 
 ## Models and access
 
-Three separate concerns:
+These are three separate pieces:
 
-- **ModelProvider** speaks one wire protocol (`openai_compat`, `anthropic`, `scripted` for tests)
-  and declares which `ModelFeature`s Legion can use through it. A binding's usable features are
-  what the operator declares for the model intersected with what the adapter supports.
-- **AccessProvider** decides how requests are authenticated: none (local), API key, and later
-  enterprise gateway headers, workload identity and documented OAuth flows.
-- **ModelResolver** maps an agent's requirement, such as `general/default` needing tools, to a
-  configured binding of provider, model and access. If no binding satisfies what the agent needs,
-  the run does not start.
+- `ModelProvider` speaks one wire format: OpenAI-compatible, Anthropic, or scripted for tests.
+- `AccessProvider` handles authentication. Right now that's none (local) or an API key. Gateways,
+  workload identity and OAuth (where the provider documents it) come in Phase 4.
+- `ModelResolver` maps what the agent asks for (e.g. `general/default` with tools) to a configured
+  binding. If nothing fits, the run doesn't start. A binding's features are what the operator
+  declares, limited to what the adapter implements.
 
-Provider-specific options travel in `ModelRequest.provider_options[provider_name]` and are ignored
-by every other provider. Reasoning blocks are kept as opaque metadata and only sent back to the
-provider that produced them.
+Provider-specific settings go in `provider_options[kind]`, and each adapter ignores the others.
+Reasoning blocks are passed back only to the provider that produced them.
 
-Adapters talk HTTP through httpx rather than vendor SDKs, so Legion is the only place retries
-happen and every retry is counted against the budget.
+The adapters use httpx instead of vendor SDKs so that Legion is the only thing retrying, and
+every retry counts against the budget.
 
-### External agent runtimes (Phase 4)
-
-GitHub's Copilot SDK, the Claude Agent SDK and the Codex app-server are agent runtimes, not
-inference endpoints: their own loop runs the tools. Legion will support them as an
-`ExternalAgentRuntime` that a task can delegate to, with a declared guarantee level, and events will
-mark every result that came back from one. They are never presented as a `ModelProvider`, because
-that would claim enforcement Legion does not have.
+GitHub's Copilot SDK, the Claude Agent SDK and the Codex app-server run their own agent loops.
+In Phase 4 they'll be supported as external runtimes a task can hand work to, with the results
+marked as such in the events. I'm not treating them as model providers, because their tools would
+run outside Legion's checks.
 
 ## Secrets
 
-Configuration holds references such as `env:ANTHROPIC_API_KEY`, never values. A `Secret` wraps
-the value, and its `repr` and `str` never show it. Access providers resolve secrets per request.
-Tools receive only the credentials their spec declares, resolved at step 7. Every resolved value
-is registered with the recorder, which redacts it (and its JSON-escaped form) from every event
-payload, including error messages on fatal paths. Tool output is also scanned
-for the values of those credentials and redacted before it reaches the model or the event log.
+Config holds references like `env:ANTHROPIC_API_KEY`, never values. `Secret` wraps a value and
+won't print it. A tool gets only the credentials its spec lists. Every secret value resolved
+during a run is scrubbed (along with its JSON-escaped form) from every event before it's written,
+and from tool output before the model sees it.
 
-## Identity integration (NIA and MIA)
+## Identity (NIA and MIA)
 
-Legion enforces within one run. Identity, credential issuance, per-agent grants, kill state and
-risk across runs belong to external authorities reached through `IdentityPort`. The default
-`NullIdentityPort` is local-only and never kills.
+Legion only enforces inside a single run. Identity, issuing credentials, per-agent grants, kill
+switches and risk across runs belong to an external service reached through `IdentityPort`. The
+default `NullIdentityPort` never kills and never vetoes.
 
-| IdentityPort method | NIA | MIA |
+| Method | NIA | MIA |
 |---|---|---|
 | `kill_state(identity)` | kill sentinel, revoked credential | mandate revoked or suspect |
-| `authorize(action, identity)` | gateway decision for the tool call | `authz.authorize` |
+| `authorize(action, identity)` | gateway decision | `authz.authorize` |
 | `credential(agent_ref, purpose)` | `POST /agents/{ref}/credentials` | token exchange |
-| `on_delegation(parent, child)` | register child and grant a subset | `mandates.delegate` |
-| `evidence(action_hash)` | incidents and audit records | audit records |
+| `on_delegation(parent, child)` | register the child with a subset of grants | `mandates.delegate` |
+| `evidence(action_hash)` | incidents, audit | audit |
 
-The effective permission for an action is the Legion grant intersected with the external
-decision. A second integration mode routes tool execution through NIA's gateway
-(`POST /tools/{tool}/call` or `/mcp`), so that a bypassed Legion still meets NIA. The kill check
-runs before every tool execution and before every model call.
+An action runs only if both Legion's grant and the external service allow it. NIA can also sit in
+front of the tools as a gateway (`POST /tools/{tool}/call` or `/mcp`), which means someone who gets
+around Legion still has to get past NIA. For now only the interface and the null version exist.
 
-In Phase 1 only the protocol and the null implementation exist.
+## Failures
 
-## Failure model
+Each error has a disposition and the loop only looks at that:
 
-Every error type carries one disposition. The loop reads the disposition, not the type.
+- `retryable`: model timeouts, rate limits, 5xx, malformed responses, read-tool timeouts. Retried
+  with backoff up to a limit, and each attempt is charged.
+- `recoverable`: unknown tool, bad arguments, denied, tool raised, repeated call. The model is told
+  and can try something else.
+- `fatal`: budget exceeded, auth failure, context too long, loop, a write in doubt. The run ends.
 
-| Disposition | Meaning | Examples |
-|---|---|---|
-| `retryable` | Retry with bounded backoff, each attempt counted | model timeout, rate limit, 5xx, malformed response, read-tool timeout |
-| `recoverable` | Tell the model and let it choose again | unknown tool, invalid arguments, capability or policy denial, tool raised, repeated action |
-| `fatal` | Fail the task and the run | budget exceeded, auth failure, context exhausted, loop detected, write in doubt (Phase 1) |
-| `escalate` (added in Phase 2) | Pause for a human | write in doubt, credential expired |
+Phase 2 adds `escalate`, which pauses the run for a human.
 
-Retries are bounded by `RetryPolicy` and by the budget, so a model cannot cause unbounded retries
-by producing bad output. Five identical actions in one task is a fatal loop; the third is refused
-with a recoverable error first.
+## Resume (Phase 2)
 
-## Persistence and resume (Phase 2)
-
-Resume rebuilds the run from events. Model responses and tool results that were recorded are
-replayed, never requested or executed again. An action with `tool.started` and no completion is
-in doubt, and its effect class decides what happens (table above).
+Resume will rebuild the run from events. Recorded model responses and tool results are reused,
+not requested again. An action that started and never finished is in doubt, and its effect class
+decides what to do (table above).
 
 ## Delegation (Phase 3)
 
-A built-in `delegate` tool creates a child task with an attenuated grant and a budget carved out
-of the parent's ledger. Limits: depth, children per task, concurrent tasks. A child fails, times
-out or is cancelled as a unit and the parent receives a structured result. Authority for a child
-beyond the parent's can only come from an external `GrantAuthority`, never from a model.
+A built-in `delegate` tool will start a child task with a narrower grant and a slice of the
+parent's remaining budget, with limits on depth, fan-out and concurrency. Extra authority for a
+child can only come from outside (a human, NIA or MIA), never from the model.
 
 ## Tools
 
-Tool sources are adapters over one `Tool` protocol: native Python today, MCP in Phase 5, others
-later. A tool must declare its effect class and required capabilities or it cannot be registered.
-Tool names are limited to `[a-z][a-z0-9_]{0,63}` so the same name works with every provider.
+Tool sources plug in behind one `Tool` protocol: native Python now, MCP in Phase 5. A tool without
+an effect class and capabilities can't be registered. Names must match `[a-z][a-z0-9_]{0,63}`
+because that works with every provider.
 
-The model sees only the tools the agent lists, and calling any other tool is refused. Native tools
-are trusted code running in the harness process: capability checks decide whether a call happens,
-not what the code does once it runs. For that reason there is no shell tool.
+The model only sees the tools the agent lists, and calling anything else gets refused. Native
+tools run inside the Legion process, so the checks decide whether a tool runs but not what its code
+does. That's why there's no shell tool.
 
 ## Multi-tenancy (not built)
 
-Every store is keyed by run, and the run is where a tenant id will be added. The rule for later
-work: tenant is part of the key of every store and every lookup, never a filter applied
-afterwards, and credentials are resolved through a tenant-scoped resolver so one tenant's
-reference cannot name another tenant's secret.
+Everything is keyed by run, and that's where a tenant id would go. When I add it, the tenant has to
+be part of every storage key and every credential lookup, not a filter on top.

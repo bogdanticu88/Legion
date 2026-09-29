@@ -1,22 +1,21 @@
-# ADR 0007: Effect classes decide retries, policy defaults and resume
+# ADR 0007: Effect classes decide retries and resume
 
 Status: accepted
 
 ## Context
 
-Whether a tool call may be retried, or re-run after a crash, depends on what it does to the
-world. Frameworks that re-execute on resume make every write run twice unless the tool author
-noticed.
+Whether a tool call can be retried, or re-run after a crash, depends on what it does. Frameworks
+that simply re-execute on resume run every write twice unless the tool author thought of it.
 
 ## Decision
 
-Every tool declares one of `pure`, `read`, `write_idempotent`, `write`, `external_irreversible`.
-Registration fails without it. Timeouts and retryable errors are retried only for the first three.
-A `write` or `external_irreversible` action that times out is recorded as in doubt: in Phase 1
-that fails the task, and from Phase 2 it escalates to a human. The default policy denies
-`external_irreversible` until approvals exist.
+Every tool declares `pure`, `read`, `write_idempotent`, `write` or `external_irreversible`, and
+can't be registered without one. Only the first three get retried. A `write` or
+`external_irreversible` call that times out is recorded as in doubt; that fails the task in Phase 1
+and will go to a human from Phase 2. The default policy denies `external_irreversible` until
+approvals exist.
 
 ## Consequences
 
-- Tool authors must think about effects once, at declaration.
-- A mis-declared effect class is an operator error the runtime cannot detect.
+- Tool authors have to think about effects once, when they declare the tool.
+- If they declare the wrong class, Legion can't tell.

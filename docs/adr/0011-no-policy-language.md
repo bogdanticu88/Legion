@@ -4,15 +4,15 @@ Status: accepted
 
 ## Context
 
-Policy languages are hard to design and harder to secure. OPA/Rego and Cedar already exist.
+Policy languages are hard to design and harder to secure, and OPA/Rego and Cedar already exist.
 
 ## Decision
 
-`PolicyDecisionPoint` is a protocol. The built-in implementation is a rule table matched on tool
-name glob, capability name glob and effect class, with deny winning over approval and approval
-winning over allow. Anything richer is an adapter.
+`PolicyDecisionPoint` is an interface. The built-in version is a rule table matched on tool name,
+capability and effect class, where deny beats approval and approval beats allow. Anything more
+goes in an adapter.
 
 ## Consequences
 
-- The built-in policy cannot express conditions on argument values. Those belong in the tool's
-  resource extraction, in capabilities, or in an external engine.
+- The built-in policy can't look at argument values. Use resource extraction and capabilities for
+  that, or an external engine.

@@ -1,17 +1,17 @@
 # Roadmap
 
-Each phase ends with the repository runnable, the tests green and the documentation updated.
-Order changed from the first draft: durability moved before delegation and MCP because adding it
-later is the usual way side effects end up running twice, and approvals moved in with durability
-because an approval needs a run that can pause.
+Each phase should leave the repo working, tested and documented.
 
-| Phase | Scope | Acceptance criteria |
+I moved crash recovery ahead of delegation and MCP because adding it late is how writes end up
+running twice. Approvals moved in with it because an approval needs a run that can pause.
+
+| Phase | What | Done when |
 |---|---|---|
-| 0 | Assessment, architecture, ADRs, threat model, interfaces | Documents agree with each other |
-| 1 | Single agent. Scripted, OpenAI-compatible and Anthropic providers with API-key and no-auth access. Native tools. Action pipeline. Grant, policy, ledger (steps, model calls, tool calls, tokens, cost, wall clock). Event store in memory and SQLite with hash chain. Failure dispositions, bounded retries, repeat detection. CLI: `init`, `providers`, `agent validate`, `run`, `runs`, `inspect`, `verify` | End-to-end run with no API key. Every denial path tested. Budget exhaustion ends the run with `budget.exceeded`. A sentinel secret never appears in the database. Chain verifies and a tampered row fails verification. Projections rebuilt from storage match the live run |
-| 2 | Resume from events after a crash. In-doubt handling by effect class. Approval pause, `approve`, `deny`, `resume`. Action-hash binding, single use, expiry | A process killed during a tool call resumes correctly. An approved action with changed arguments is refused. An expired approval is refused |
-| 3 | `delegate` built-in, attenuation, ledger carve-out, parallel children, cancellation and failure propagation, depth, fan-out and concurrency limits. A second, non-security example | Property tests: no child ever holds a capability or budget its parent lacked, and total spend never exceeds the root budget over random delegation trees |
-| 4 | Gemini adapter. Access providers beyond API keys: gateway headers, workload identity for one cloud, OAuth only where documented. One `ExternalAgentRuntime` (Copilot SDK or Claude Agent SDK) with a declared guarantee level | The same agent runs unchanged on three bindings. A capability mismatch refuses to start. External results are marked in events |
-| 5 | MCP adapter on the official SDK. Operator manifests, pinned description hashes, disconnect handling | A changed tool description is blocked. An unmanifested tool is refused |
-| 6 | Security-operations reference application: orchestrator plus endpoint, identity and threat-intelligence investigators, simulated tools, containment behind approval | The scenario runs deterministically on the scripted provider and optionally on a real model |
-| 7 | Versioned event schema, JSONL export, OpenTelemetry GenAI span export, NIA `IdentityPort` adapter and NIA gateway tool transport, optional MIA adapter | A separate repository computes success, authority compliance, cost and latency metrics from exports alone |
+| 0 | Assessment, architecture, ADRs, threat model | Docs agree with each other |
+| 1 | One agent per run. Scripted, OpenAI-compatible and Anthropic providers. Native tools, the action pipeline, grants, policy, budgets (steps, calls, tokens, cost, wall clock), SQLite event log with hash chain, retries, repeat detection. CLI: `init`, `providers`, `agent validate`, `run`, `runs`, `inspect`, `verify` | Runs end to end without an API key. Every refusal path has a test. Budget overruns end the run. A planted secret never shows up in the database. Editing a stored event fails `verify`. State rebuilt from storage matches the live run |
+| 2 | Resume after a crash, in-doubt handling by effect class, approvals (`approve`, `deny`, `resume`) tied to the action hash, single use, with expiry | Killing the process mid-tool and resuming does the right thing. An approved action with changed arguments is refused. Expired approvals are refused |
+| 3 | `delegate` tool, narrower child grants, child budgets carved from the parent, parallel children, cancellation, limits on depth, fan-out and concurrency. A second, non-security example | Property tests show no child ever gets a capability or budget its parent lacked, and total spend never goes over the root budget |
+| 4 | Gemini adapter. Gateway headers, workload identity for one cloud, OAuth where the provider documents it. One external runtime (Copilot SDK or Claude Agent SDK) | The same agent runs on three bindings without changes. Missing features stop the run from starting. Results from external runtimes are marked in the events |
+| 5 | MCP through the official SDK, operator manifests, pinned description hashes, reconnects | A changed tool description gets blocked. Tools without a manifest entry are refused |
+| 6 | Security-operations example: an orchestrator plus endpoint, identity and threat-intel agents on simulated tools, with containment behind approval | Runs the same way every time on the scripted provider, and optionally on a real model |
+| 7 | Versioned event schema, JSONL and OpenTelemetry export, NIA adapter and NIA gateway as a tool transport, maybe MIA | A separate repo can compute success, authority compliance, cost and latency from the exports alone |

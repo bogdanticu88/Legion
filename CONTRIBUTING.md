@@ -7,8 +7,8 @@ uv sync
 uv run pytest
 ```
 
-No API key is needed. Tests use the scripted provider and recorded HTTP exchanges. Tests that call
-a real model are marked `integration` and are skipped unless their endpoint is configured:
+You don't need an API key. The tests use the scripted provider and recorded HTTP responses. The
+tests that call a real model are marked `integration` and skip unless you point them somewhere:
 
 ```bash
 LEGION_TEST_OPENAI_COMPAT_URL=http://localhost:11434/v1 LEGION_TEST_OPENAI_COMPAT_MODEL=llama3.1 \
@@ -16,28 +16,23 @@ LEGION_TEST_OPENAI_COMPAT_URL=http://localhost:11434/v1 LEGION_TEST_OPENAI_COMPA
 ANTHROPIC_API_KEY=... LEGION_TEST_ANTHROPIC_MODEL=claude-sonnet-5-5 uv run pytest -m integration
 ```
 
-## Before opening a pull request
+## Before a pull request
 
 - `uv run ruff check src tests`, `uv run ruff format --check src tests` and `uv run mypy` pass.
 - `uv run pytest` passes, including `tests/conformance`.
-- New behaviour has tests. A change to `kernel/pipeline.py` needs a test for every step it
-  touches.
-- Documentation describes what the code does. A new event type or payload field updates
-  `docs/events.md` in the same pull request.
+- New behaviour comes with tests. If you touch `kernel/pipeline.py`, test each step you changed.
+- If you add an event type or payload field, update `docs/events.md` in the same PR.
 
-## Ground rules
+## Rules for the codebase
 
-- Every effect goes through `ActionPipeline`. Do not add a path to a tool that skips it, and do not
-  add hooks that let a step be skipped.
-- Authority only narrows. Nothing may widen a `Grant` except the operator configuration or an
-  external grant authority.
-- No domain concepts in `src/legion`. Security, coding or business logic belongs in `examples/` or
-  in an application.
-- Adapters do not retry. Legion retries, once, in one place.
-- Secrets are references until the moment they are used, and never appear in events, artifacts or
-  model context.
-- Architectural changes get an ADR in `docs/adr/`.
+- Tools only run through `ActionPipeline`. Don't add another path, and don't add hooks that skip a
+  step.
+- Grants only get narrower. Only operator config or an external authority can widen one.
+- No domain-specific code in `src/legion`. That goes in `examples/` or your own application.
+- Adapters don't retry. Legion does.
+- Secrets stay references until they're used and never end up in events, artifacts or the prompt.
+- Bigger design changes get an ADR in `docs/adr/`.
 
-## Commit messages
+## Commits
 
-Imperative subject under 72 characters, body explaining why when it is not obvious.
+Short imperative subject, and a body when the reason isn't obvious.
