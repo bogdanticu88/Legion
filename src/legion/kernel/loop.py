@@ -5,8 +5,7 @@ import time
 from decimal import Decimal
 from typing import NoReturn
 
-import jsonschema
-
+from legion import schemas
 from legion.canonical import canonical_json
 from legion.domain.agent import ModelFeature
 from legion.domain.budget import Dimension
@@ -200,9 +199,9 @@ class AgentLoop:
                 structured = json.loads(_strip_fence(text))
                 if not isinstance(structured, dict):
                     raise ValueError("final answer is not a JSON object")
-                jsonschema.validate(structured, schema)
-            except (ValueError, jsonschema.ValidationError) as exc:
-                reason = exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc)
+                schemas.validate(structured, schema)
+            except (ValueError, schemas.ValidationError) as exc:
+                reason = exc.message if isinstance(exc, schemas.ValidationError) else str(exc)
                 view = self.k.state.tasks[task.task_id]
                 if view.rejections >= MAX_OUTPUT_REJECTIONS:
                     raise FinalOutputInvalid(f"final answer still invalid: {reason}") from exc

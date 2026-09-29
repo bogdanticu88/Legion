@@ -10,8 +10,7 @@ import time
 from decimal import Decimal
 from typing import Any
 
-import jsonschema
-
+from legion import schemas
 from legion.access.secrets import Secret
 from legion.authority.policy import PolicyContext, Verdict
 from legion.canonical import canonical_json
@@ -144,8 +143,8 @@ class ActionPipeline:
     def _action(self, tool: Tool, call: ToolCallPart, task: TaskRuntime) -> Action:
         spec = tool.spec
         try:
-            jsonschema.validate(call.arguments, spec.input_schema)
-        except jsonschema.ValidationError as exc:
+            schemas.validate(call.arguments, spec.input_schema)
+        except schemas.ValidationError as exc:
             where = "/".join(str(p) for p in exc.absolute_path) or "arguments"
             raise InvalidArguments(f"{where}: {exc.message}") from exc
         try:
@@ -478,8 +477,8 @@ class ActionPipeline:
         correlation = {"action_hash": action.hash}
         if output_schema is not None and not result.is_error:
             try:
-                jsonschema.validate(result.data, output_schema)
-            except jsonschema.ValidationError as exc:
+                schemas.validate(result.data, output_schema)
+            except schemas.ValidationError as exc:
                 # The tool did run, so don't report a failure (the model might retry a write).
                 # Leave out exc.message, it quotes the bad value.
                 where = "/".join(str(p) for p in exc.absolute_path) or "output"

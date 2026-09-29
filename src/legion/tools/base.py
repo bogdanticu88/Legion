@@ -6,10 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, Self
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from legion import schemas
 from legion.access.secrets import Secret
 from legion.domain.action import EffectClass
 from legion.domain.capability import Capability
@@ -52,11 +51,9 @@ class ToolSpec(BaseModel):
         for schema in (self.input_schema, self.output_schema):
             if schema is not None:
                 try:
-                    Draft202012Validator.check_schema(schema)
-                except SchemaError as exc:
-                    raise ValueError(
-                        f"tool {self.name} has an invalid schema: {exc.message}"
-                    ) from exc
+                    schemas.check(schema)
+                except ValueError as exc:
+                    raise ValueError(f"tool {self.name}: {exc}") from exc
         return self
 
 

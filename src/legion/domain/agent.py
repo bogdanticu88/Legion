@@ -13,6 +13,7 @@ from pydantic import (
     model_validator,
 )
 
+from legion import schemas
 from legion.canonical import digest
 from legion.domain.budget import BudgetLimits
 from legion.domain.capability import Capability
@@ -67,6 +68,13 @@ class AgentSpec(BaseModel):
     def _name(cls, value: str) -> str:
         if not _AGENT_NAME.match(value):
             raise ValueError(f"invalid agent name: {value!r}")
+        return value
+
+    @field_validator("output_schema")
+    @classmethod
+    def _schema(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is not None:
+            schemas.check(value)
         return value
 
     @field_validator("capabilities", mode="before")
