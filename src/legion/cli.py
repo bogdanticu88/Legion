@@ -471,6 +471,70 @@ def inspect(
 
 
 @app.command()
+def credentials(
+    run_id: str,
+    config: ConfigOption = Path("legion.yaml"),
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print each credential decision as a JSON line.")
+    ] = False,
+) -> None:
+    """Show each credential a run's calls used or were refused, and why. Never the secret."""
+    loaded = _load(config)
+    store = loaded.store()
+    try:
+        chain = _run(store.verify(run_id))
+        events = _run(store.read(run_id)) if chain.ok else []
+    finally:
+        store.close()
+    if not chain.ok:
+        err.print(f"[red]warning:[/red] chain broken at seq {chain.bad_seq}; not showing it")
+        raise typer.Exit(1)
+    tools = {
+        (e.task_id, e.payload["call_id"]): e.payload["tool"]
+        for e in events
+        if e.type is EventType.ACTION_PROPOSED
+    }
+    rows = [
+        {
+            "decision": "used" if e.type is EventType.CREDENTIAL_RESOLVED else "refused",
+            "task_id": e.task_id,
+            "tool": tools.get((e.task_id, e.payload["call_id"])),
+            **e.payload,
+        }
+        for e in events
+        if e.type in (EventType.CREDENTIAL_RESOLVED, EventType.CREDENTIAL_REFUSED)
+    ]
+    if as_json:
+        for row in rows:
+            print(json.dumps(row, sort_keys=True))
+        return
+    if not rows:
+        out.print("no credentials in this run")
+        return
+    table = Table("call", "who", "needs / got", "asked for", "evidence showed", "decision")
+    for row in rows:
+        perms = ", ".join(row["requested_permissions"]) or "-"
+        asked = f"{perms} on {row['requested_resource'] or '-'}"
+        shown = (
+            f"{', '.join(row['permissions'])} on {row['resource'] or 'any'}"
+            if row["permissions"]
+            else "-"
+        )
+        until = f" until {row['expires_at'][11:19]}" if row["expires_at"] else ""
+        why = "; ".join(row["problems"])
+        decision = f"{row['decision']} ({row['authority']}{until})" + (f": {why}" if why else "")
+        table.add_row(
+            _safe(f"{row['tool'] or '?'} {row['call_id']}"),
+            _safe(f"{row['subject']} for {row['principal']}"),
+            _safe(f"{row['required']} / {row['assurance'] or 'rejected'}"),
+            _safe(asked),
+            _safe(shown + ("  WIDER" if row["widened"] else "")),
+            _safe(decision),
+        )
+    out.print(table)
+
+
+@app.command()
 def tasks(run_id: str, config: ConfigOption = Path("legion.yaml")) -> None:
     """Show a run's tasks: who handed work to whom, where each one is, and what it used."""
     loaded = _load(config)
