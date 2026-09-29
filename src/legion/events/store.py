@@ -51,9 +51,13 @@ def seal(draft: EventDraft, seq: int, prev_hash: str) -> Event:
     return Event.model_validate({**body, "hash": chain_hash(prev_hash, body)})
 
 
-def verify_bodies(bodies: Sequence[tuple[dict[str, Any], str]]) -> VerifyResult:
+def verify_bodies(
+    bodies: Sequence[tuple[dict[str, Any], str]], run_id: str | None = None
+) -> VerifyResult:
     prev = GENESIS_HASH
     for index, (body, stored_hash) in enumerate(bodies, start=1):
+        if run_id is not None and body.get("run_id") != run_id:
+            return VerifyResult(False, index - 1, index, "event belongs to another run")
         if body.get("seq") != index:
             return VerifyResult(False, index - 1, index, "sequence gap or reorder")
         if body.get("prev_hash") != prev:
@@ -125,4 +129,4 @@ class MemoryEventStore:
         )
 
     async def verify(self, run_id: str) -> VerifyResult:
-        return verify_bodies([(e.body(), e.hash) for e in self._events.get(run_id, [])])
+        return verify_bodies([(e.body(), e.hash) for e in self._events.get(run_id, [])], run_id)

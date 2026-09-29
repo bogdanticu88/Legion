@@ -6,6 +6,7 @@ import sqlite3
 import threading
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from legion.canonical import GENESIS_HASH, canonical_json
 from legion.events.store import (
@@ -110,7 +111,7 @@ class SqliteEventStore:
                 "SELECT body, hash FROM events WHERE run_id = ? AND seq > ? ORDER BY seq",
                 (run_id, after_seq),
             ).fetchall()
-        return [Event.model_validate({**json.loads(body), "hash": h}) for body, h in rows]
+        return [Event.model_validate({**_load(body), "hash": h}) for body, h in rows]
 
     async def runs(self) -> list[RunSummary]:
         return await asyncio.to_thread(self._runs)
@@ -131,6 +132,31 @@ class SqliteEventStore:
     def _verify(self, run_id: str) -> VerifyResult:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT body, hash FROM events WHERE run_id = ? ORDER BY seq", (run_id,)
+                "SELECT seq, type, body, hash FROM events WHERE run_id = ? ORDER BY seq", (run_id,)
             ).fetchall()
-        return verify_bodies([(json.loads(body), h) for body, h in rows])
+        bodies = []
+        for seq, kind, text, stored_hash in rows:
+            try:
+                body = _load(text)
+            except ValueError as exc:
+                return VerifyResult(False, seq - 1, seq, str(exc))
+            # The columns are what SQL queries see; the body is what's hashed. They must agree.
+            if body.get("seq") != seq or body.get("type") != kind:
+                return VerifyResult(False, seq - 1, seq, "columns don't match the event body")
+            bodies.append((body, stored_hash))
+        return verify_bodies(bodies, run_id)
+
+
+def _load(text: str) -> dict[str, Any]:
+    # A body with a key twice hashes fine, but Python keeps the last value and SQLite's
+    # json_extract the first, so two readers would see different events.
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError(f"event body has {key!r} twice")
+            out[key] = value
+        return out
+
+    loaded: dict[str, Any] = json.loads(text, object_pairs_hook=pairs)
+    return loaded

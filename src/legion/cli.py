@@ -297,10 +297,13 @@ def approvals(config: ConfigOption = Path("legion.yaml")) -> None:
     """List approvals waiting for a decision."""
     loaded = _load(config)
     store = loaded.store()
+    skipped: list[str] = []
     try:
-        pending = _run(operator.approvals(store))
+        pending = _run(operator.approvals(store, skipped=skipped))
     finally:
         store.close()
+    for run_id in skipped:
+        err.print(f"[red]warning:[/red] run {_safe(run_id)} left out: its log doesn't verify")
     table = Table(
         Column("approval", no_wrap=True), Column("run", no_wrap=True), "tool", "target", "expires"
     )
@@ -439,9 +442,20 @@ def inspect(
     loaded = _load(config)
     store = loaded.store()
     try:
-        events = _run(store.read(run_id))
+        chain = _run(store.verify(run_id))
+        events = _run(store.read(run_id)) if chain.ok else []
+    except ValueError as exc:
+        err.print(f"[red]run {_safe(run_id)} can't be read:[/red] {_safe(exc)}")
+        raise typer.Exit(1) from exc
     finally:
         store.close()
+    if not chain.ok:
+        # what's in the log can't be trusted past this point, so say so before showing anything
+        err.print(
+            f"[red]warning:[/red] chain broken at seq {chain.bad_seq}: {_safe(chain.reason)}; "
+            f"run `legion verify {_safe(run_id)}`"
+        )
+        raise typer.Exit(1)
     if not events:
         err.print(f"no run {run_id}")
         raise typer.Exit(1)

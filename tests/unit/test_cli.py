@@ -83,6 +83,9 @@ def test_end_to_end(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     conn.close()
     code, out = cli(project, "verify", run_id)
     assert code == 1 and "broken" in out
+    # inspect won't show a log whose chain is broken as if it were real
+    code, out = cli(project, "inspect", run_id)
+    assert code == 1 and "chain broken" in out
 
 
 def test_providers_never_print_secrets(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

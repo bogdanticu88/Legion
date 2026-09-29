@@ -32,13 +32,23 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-async def approvals(store: EventStore, *, now: Callable[[], datetime] = _now) -> list[Pending]:
-    """Approvals still waiting for a decision, across all runs whose logs verify."""
+async def approvals(
+    store: EventStore,
+    *,
+    now: Callable[[], datetime] = _now,
+    skipped: list[str] | None = None,
+) -> list[Pending]:
+    """Approvals still waiting for a decision, across all runs whose logs verify.
+
+    Runs whose logs don't verify are left out and, if `skipped` is given, listed there.
+    """
     out = []
     for summary in await store.runs():
         try:
             state = await load_state(store, summary.run_id)
         except LegionError:
+            if skipped is not None:
+                skipped.append(summary.run_id)
             continue
         for approval in state.approvals.values():
             if approval.status == "requested":

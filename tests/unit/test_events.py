@@ -95,6 +95,35 @@ async def test_sqlite_tampering_is_detected(tmp_path: Path, change: str) -> None
     assert result.bad_seq in (2, 3)
 
 
+@pytest.mark.parametrize(
+    ("sql", "run_id"),
+    [
+        # rows relabelled as another run: every body still chains, but names r2
+        ("UPDATE events SET run_id = 'r3' WHERE run_id = 'r2'", "r3"),
+        # SQL sees seq 999 or a different type; the hashed body doesn't
+        ("UPDATE events SET seq = 999 WHERE run_id = 'r1' AND seq = 3", "r1"),
+        ("UPDATE events SET type = 'approval.granted' WHERE run_id = 'r1' AND seq = 2", "r1"),
+        # a key twice: Python reads the last copy, SQLite's json_extract the first
+        (
+            'UPDATE events SET body = \'{"type":"approval.granted",\' || substr(body, 2) '
+            "WHERE run_id = 'r1' AND seq = 2",
+            "r1",
+        ),
+    ],
+    ids=["relabelled", "seq-column", "type-column", "duplicate-key"],
+)
+async def test_column_and_body_tampering_is_detected(tmp_path: Path, sql: str, run_id: str) -> None:
+    store = SqliteEventStore(tmp_path / "e.db")
+    await store.append(drafts("r1", 3))
+    await store.append(drafts("r2", 3))
+    store.close()
+    conn = sqlite3.connect(tmp_path / "e.db", isolation_level=None)
+    conn.execute("DROP TRIGGER events_no_update")
+    conn.execute(sql)
+    conn.close()
+    assert not (await SqliteEventStore(tmp_path / "e.db").verify(run_id)).ok
+
+
 def test_canonical_json_is_order_independent() -> None:
     assert canonical_json({"b": 1, "a": [1, {"d": 2, "c": 3}]}) == canonical_json(
         {"a": [1, {"c": 3, "d": 2}], "b": 1}
