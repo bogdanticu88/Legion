@@ -14,7 +14,7 @@ Every state change is written as an event before Legion acts on it. Run and task
 use and the transcript are all computed from the events. Events are hash-chained the same way as
 MIA's audit log, and the SQLite store rejects updates and deletes.
 
-Resume itself comes in Phase 2, but from Phase 1 on nothing important lives only in memory.
+Resume came later, but from the first version on nothing important lives only in memory.
 
 ## Consequences
 

@@ -1,12 +1,12 @@
 # ADR 0021: NIA as a credential authority, and Legion's own call id
 
-Status: accepted (Phase 5B.3)
+Status: accepted
 
 ## Context
 
 ADR 0019 gave Legion a generic `CredentialAuthority` port and decided that Legion, not the
 authority, judges what a credential is worth. ADR 0020 connected NIA for identity and kill state.
-NIA (Phase 5B.2, commit `40891e3`) now issues scoped credentials: bound to one NIA agent, one
+NIA (as of commit `40891e3`) now issues scoped credentials: bound to one NIA agent, one
 resource, a set of NIA tools, one audience, and a caller's Action hash, call id and Grant
 fingerprint, with a fixed expiry, and reports them active, expired, revoked or unknown.
 

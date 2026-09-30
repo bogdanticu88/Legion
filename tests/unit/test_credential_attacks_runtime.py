@@ -1,4 +1,4 @@
-# More attacks from the Phase 5A review: an approval across a crash between refusal events,
+# More attacks from the same review: an approval across a crash between refusal events,
 # config typos, duplicate references within a call, kill state during replacement, and credentials
 # the authority gave no usable evidence for.
 

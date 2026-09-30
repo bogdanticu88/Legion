@@ -1,4 +1,4 @@
-# Attacks against Legion's NIA adapter with a real nia-api binary, from the Phase 5B.1 review.
+# Attacks against Legion's NIA adapter with a real nia-api binary, from a security review.
 # Skipped unless LEGION_TEST_NIA_BIN points at it.
 
 from __future__ import annotations

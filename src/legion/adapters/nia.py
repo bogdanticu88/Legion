@@ -158,7 +158,7 @@ class NiaIdentityPort:
         return []
 
     async def credential_evidence(self, server: str) -> ServerCredentialClaim | None:
-        # not a credential authority in this phase
+        # NIA credentials go through nia_credentials, not the identity port
         return None
 
     # the one lookup everything goes through

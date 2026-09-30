@@ -51,10 +51,10 @@ isn't signed; resources are compared as strings; children run one at a time; tes
 
 ## Development history
 
-Written as the work happened, by internal milestone ("phase"), and kept as written. Later entries
+Written as the work happened, one milestone at a time, and kept as written. Later entries
 sometimes change what earlier ones say; the section above describes the release.
 
-### Phase 5B.3
+### NIA as credential authority
 
 - NIA as a credential authority: `legion.adapters.nia_credentials.NiaCredentialAuthority` behind
   the generic `CredentialAuthority` port, configured with `provider: nia` under
@@ -69,7 +69,7 @@ sometimes change what earlier ones say; the section above describes the release.
   reference than the one handed over with the secret, the handed-over one is revoked.
 - Neither NIA adapter takes proxy settings from the environment.
 
-### Phase 5B.1
+### NIA as identity authority
 
 - NIA as identity authority: `legion.adapters.nia.NiaIdentityPort`, configured under `identity:`
   in `legion.yaml` with an explicit map from Legion agent names to NIA refs. It asks NIA's
@@ -81,9 +81,9 @@ sometimes change what earlier ones say; the section above describes the release.
   or [::1]); the name `localhost` is refused, since it can reach a different listener than meant.
   This applies to model providers with an API key and MCP servers too.
 - A stand-in NIA for tests (`tests/nia_lab.py`) and an integration test against a real `nia-api`
-  (`LEGION_TEST_NIA_BIN`). No NIA changes; NIA wasn't used for credentials yet (see Phase 5B.3).
+  (`LEGION_TEST_NIA_BIN`). No NIA changes; NIA wasn't used for credentials yet (see NIA as credential authority).
 
-### Phase 5A
+### Credential authorities
 
 - A `CredentialAuthority` port, separate from `IdentityPort`, issues a credential per call from
   an operator mapping (capability to provider permissions). Legion builds the request from the
@@ -110,16 +110,16 @@ sometimes change what earlier ones say; the section above describes the release.
   shows them.
 - `examples/credential_demo.py` (eight cases), `docs/nia-integration-requirements.md` (the
   credential-authority contract, designs for authenticated approvals and external checkpoints, NIA
-  gap analysis and Phase 5B options).
+  gap analysis and the ways it could be integrated).
 - `IdentityPort.credential()` removed (it was never called). The MCP server credential claim is
   `ServerCredentialClaim`, and its `verified` field is now `claimed_verified`.
 
-### Before Phase 5
+### Package name
 
 - The distribution is now called `legion-runtime`, because `legion` on PyPI is an unrelated
   project. The import package and the `legion` command are unchanged. Nothing is published.
 
-### Review before Phase 5
+### Security review fixes
 
 - Schemas can't reach outside themselves. jsonschema used to follow a `$ref` to a URL or a
   `file://` path, so a server-written tool schema could make Legion send a request or read a
@@ -146,7 +146,7 @@ sometimes change what earlier ones say; the section above describes the release.
   `write_idempotent` MCP tools, what pins cover, what resume re-runs, and what the hash chain
   detects.
 
-### Phase 4
+### MCP tools
 
 - MCP tools through the official Python SDK, as the optional extra `mcp`. Servers and the tools
   to use from them are declared under `mcp_servers` in `legion.yaml`; nothing else a server
@@ -170,7 +170,7 @@ sometimes change what earlier ones say; the section above describes the release.
   dropped connections, lying errors, input requests), approvals and delegation with MCP tools,
   and a real stdio server that dies mid-write, recovered through the CLI.
 
-### Phase 3
+### Delegation
 
 - Delegation: the built-in `delegate` tool makes a child task that runs under a narrower grant.
   Capabilities must be within the parent's grant and the child agent's spec; limits come out of
@@ -186,7 +186,7 @@ sometimes change what earlier ones say; the section above describes the release.
 - Tests: delegation attenuation, budget, limits, identity, approvals, crashes and cancellation;
   property tests over random delegation trees, with and without crashes.
 
-### Phase 2
+### Resume and approvals
 
 - `legion resume` continues a paused or crashed run from its event log, through the same loop and
   pipeline as a fresh run. Interrupted safe calls run again; interrupted writes are marked in
@@ -205,7 +205,7 @@ sometimes change what earlier ones say; the section above describes the release.
 - Tests: resume at each interruption point, approval tampering and replay, a real process killed
   mid-write, fuzzed model output, and property tests for recovery.
 
-### Phase 1
+### Kernel
 
 - Agent loop, action pipeline and runtime. Every tool call goes through the pipeline.
 - Capabilities with resource globs, grants with `attenuate` (tested ahead of delegation),
@@ -219,6 +219,6 @@ sometimes change what earlier ones say; the section above describes the release.
 - CLI: `init`, `providers`, `agent validate`, `run`, `runs`, `inspect`, `verify`.
 - Unit tests, Hypothesis invariant tests, optional real-model tests.
 
-### Phase 0
+### Design
 
 - Framework notes, architecture, ADRs 0001 to 0012, threat model, roadmap.

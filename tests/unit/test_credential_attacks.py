@@ -1,4 +1,4 @@
-# Attacks on credential handling (ADR 0019) from the Phase 5A review: long or dirty
+# Attacks on credential handling (ADR 0019) from a security review: long or dirty
 # references, secrets in evidence, requests the authority rewrites, malformed but wide evidence,
 # odd return values. Each one found a bug that's since fixed; these keep it fixed.
 

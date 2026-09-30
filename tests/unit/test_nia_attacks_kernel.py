@@ -1,4 +1,4 @@
-# Attacks on how the kernel uses the NIA port, from the Phase 5B.1 review: start, kill races,
+# Attacks on how the kernel uses the NIA port, from a security review: start, kill races,
 # delegation, resume, model influence, and Legion without NIA. test_observe_* pin behaviour that
 # isn't a vulnerability under ADR 0020 but should stay visible.
 

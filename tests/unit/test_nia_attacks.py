@@ -1,4 +1,4 @@
-# Attacks on NiaIdentityPort itself over raw sockets, from the Phase 5B.1 review: wrong agents,
+# Attacks on NiaIdentityPort itself over raw sockets, from a security review: wrong agents,
 # odd bodies and statuses, retries, timeouts, token handling, URLs. test_observe_* and
 # test_known_limitation_* pin behaviour that isn't a vulnerability under ADR 0020 but should
 # stay visible.

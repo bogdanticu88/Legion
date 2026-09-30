@@ -19,7 +19,7 @@ structured output.
   keyed by provider kind. Each adapter reads its own key and can't overwrite the core request
   fields with it.
 - Reasoning blocks only go back to the provider that produced them.
-- Phase 1 ships OpenAI-compatible and Anthropic adapters, both on httpx.
+- The first version ships OpenAI-compatible and Anthropic adapters, both on httpx.
 
 ## Consequences
 

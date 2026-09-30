@@ -137,7 +137,6 @@ def test_demo_count_matches_the_demos() -> None:
 @pytest.mark.parametrize(
     "stale",
     [
-        "Phase 5A",
         "no production credential authority",
         "isn't used for credentials yet",
         "exports plus the NIA identity adapter",
@@ -177,3 +176,25 @@ def test_extending_guide_authority_runs_as_written(project: Path) -> None:
     assert row["decision"] == "used" and row["assurance"] == "bound"
     assert row["permissions"] == ["todo:append"] and row["resource"] == "inbox"
     assert row["authority"] == "local"
+
+
+def test_no_internal_milestone_labels() -> None:
+    # development was tracked in numbered milestones; those names mean nothing to a reader
+    import subprocess
+
+    files = subprocess.run(
+        ["git", "ls-files", "*.md", "*.py", "*.yaml", "*.yml", "*.toml", "*.sh"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    label = re.compile(r"\b[Pp]hase \d")
+    found = [
+        f"{name}:{i}"
+        for name in files
+        if (ROOT / name).is_file()
+        for i, line in enumerate((ROOT / name).read_text().splitlines(), 1)
+        if label.search(line)
+    ]
+    assert found == []

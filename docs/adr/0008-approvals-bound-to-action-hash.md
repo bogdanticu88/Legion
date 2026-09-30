@@ -12,7 +12,7 @@ arguments under that approval.
 An `Action` has a canonical form (tool, arguments, resource, grant id, task id) and a SHA-256 of it.
 An approval stores that hash, who approved, when, and an expiry, and can be used once. Before
 running, Legion checks the action's hash matches and the approval is unused and not expired. Until
-Phase 2, config that could need an approval fails to load.
+approvals were built, config that could need an approval failed to load.
 
 ## Consequences
 

@@ -189,7 +189,7 @@ async def test_credential_that_doesnt_match_the_action_is_refused(
 
 
 async def test_read_on_repo_a_never_accepts_an_org_admin_credential() -> None:
-    # the case Phase 5 is about: Legion authorized repo-A read, the authority hands out admin
+    # the case credential assessment exists for: Legion authorized repo-A read, the authority hands out admin
     # on every repository. It's refused, and nothing ever calls it verified.
     lab = LabAuthority(mods={"permissions": ["admin", "contents:read"], "resource": None})
     h, lab, seen = setup([READ_A, reply("ok")], lab, minimum=Assurance.VERIFIED)

@@ -1,11 +1,11 @@
 # ADR 0020: NIA as identity authority, through IdentityPort
 
-Status: accepted (Phase 5B.1)
+Status: accepted
 
 ## Context
 
-Legion has had an `IdentityPort` since Phase 1 with only a null implementation. NIA, a separate
-service, keeps agent identities and a kill switch. This phase connects the two for identity and
+Legion has had an `IdentityPort` from the start with only a null implementation. NIA, a separate
+service, keeps agent identities and a kill switch. This ADR connects the two for identity and
 kill state only. It doesn't touch credentials: NIA can't issue a credential narrower than an
 agent (docs/nia-integration-requirements.md), so it isn't a `CredentialAuthority`.
 

@@ -1,6 +1,6 @@
 # ADR 0019: Credentials come from a credential authority and are checked against the Action
 
-Status: accepted (Phase 5A)
+Status: accepted
 
 ## Context
 
@@ -22,7 +22,7 @@ The credential itself is secret material. Credential authority is metadata about
 only worth something if someone Legion trusts vouches for it.
 
 NIA is the reference authority, but today it can't issue a credential narrower than an agent (see
-the Phase 5 notes). So this ADR defines the contract on Legion's side and proves it against a test
+docs/nia-integration-requirements.md). So this ADR defines the contract on Legion's side and proves it against a test
 authority; NIA gets the matching changes later.
 
 ## Decision
@@ -149,7 +149,7 @@ The per-call steps are:
     it's active; then the kill check once more
 16. `tool.started`, then the tool runs with the credentials in its `ToolContext`
 
-Before Phase 5 credentials were resolved between 11 and 12. Now nothing is issued for a call that
+Before this ADR, credentials were resolved between 11 and 12. Now nothing is issued for a call that
 won't run: out of budget, killed, or waiting for an approval.
 
 The secret is added to the scrub list the moment the authority returns it, before its evidence is

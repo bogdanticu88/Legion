@@ -496,7 +496,7 @@ async def test_clock_skew_on_nia_is_judged_by_legion() -> None:
     assert "issued in the future" in problem["problems"]
 
 
-# regressions from the Phase 5B.3 review
+# regressions found in review
 
 
 class _Listener:

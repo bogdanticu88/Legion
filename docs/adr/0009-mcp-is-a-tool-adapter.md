@@ -1,6 +1,6 @@
 # ADR 0009: MCP is a tool adapter with an operator-owned manifest
 
-Status: accepted, built in Phase 4 (details in ADR 0018)
+Status: accepted, built (details in ADR 0018)
 
 ## Context
 
