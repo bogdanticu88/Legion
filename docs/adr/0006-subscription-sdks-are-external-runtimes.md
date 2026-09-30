@@ -1,8 +1,7 @@
 # ADR 0006: Subscription SDKs are external runtimes, not model providers
 
-Status: accepted, but deprioritised. After looking at Raven (see docs/assessment.md) this is off
-the main roadmap: driving other harnesses is their territory, and it weakens what Legion can
-promise. It may come back as an untrusted-worker adapter.
+Status: accepted, but deprioritised. Driving other harnesses is off the main roadmap: it weakens
+what Legion can promise. It may come back as an untrusted-worker adapter.
 
 ## Context
 
