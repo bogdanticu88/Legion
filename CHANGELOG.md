@@ -1,6 +1,73 @@
 # Changelog
 
-## Unreleased
+## 0.1.0a1 (not yet released)
+
+The first public alpha. Legion works and is extensively tested; it is not production software.
+
+What it does:
+
+- **Bounded execution.** Every tool call is an Action checked in one pipeline against the task's
+  grant (capabilities scoped to resources), policy rules and budget before any tool code runs.
+  Refusals go back to the model as results, and `legion run` says what Legion refused.
+- **Exact approvals.** Policy can require a person for a call; the approval is bound to that
+  exact call (arguments, target, grant, tool definition, settings) and used once.
+- **Recovery without repeated side effects.** Runs resume from an append-only, hash-chained
+  SQLite log. After a crash, safe calls run again; a write that may have happened is left in
+  doubt for an operator to reconcile.
+- **Bounded delegation.** A child agent gets a narrower grant and a share of the parent's
+  budget; depth, fan-out and task counts are capped.
+- **MCP under the same rules.** Tools from MCP servers are used only if the operator pinned them,
+  and go through the same checks.
+- **Per-call credentials.** A credential authority issues a credential for one call; Legion
+  checks the evidence against what the call was authorized for, refuses anything wider, and
+  records the assurance it reached. Credentials are bound to Legion's own call id, not the one
+  the model sent.
+- **Optional NIA integrations.** An identity authority (kill state) and a credential authority
+  (scoped per-call credentials) for NIA, a separate project. Legion doesn't need NIA.
+
+New for this release, compared with the last development snapshot:
+
+- `legion run` and `legion resume` end with what Legion refused (`completed; Legion refused 1
+  action (capability_denied)`), and `--json` includes a `refused` list.
+- Clearer errors for a missing API key (which provider, which variable, how to fix), a literal
+  secret where a reference belongs (which key, never the value), a broken file in `agents/`, an
+  unknown tool (lists the ones that exist) and the missing MCP extra (uv and pip).
+- Tool and credential authority modules can use dataclasses: modules loaded from `legion.yaml`
+  are registered before they run.
+- `legion approval show` and `legion credentials` show Legion's call id first, with the model's
+  id beside it.
+- `legion init <dir>` prints the next commands, on one line each so they can be copied.
+- `legion --version`; `py.typed`; one version source.
+- Docs: a rewritten README, [docs/writing-tools.md](docs/writing-tools.md),
+  [docs/extending.md](docs/extending.md), [examples/authorities.py](examples/authorities.py) (a
+  minimal credential authority held to the conformance tests), and the complete limitations list
+  in THREAT_MODEL.md.
+
+Known limitations (complete list in THREAT_MODEL.md): one process on one machine with SQLite;
+native tools run unsandboxed; approvers aren't authenticated; the log is tamper-evident, not
+tamper-proof; credentials are checked just before dispatch, not at use, and authority evidence
+isn't signed; resources are compared as strings; children run one at a time; tested with Python
+3.12 and 3.13 on Linux and macOS.
+
+## Development history
+
+Written as the work happened, by internal milestone ("phase"), and kept as written. Later entries
+sometimes change what earlier ones say; the section above describes the release.
+
+### Phase 5B.3
+
+- NIA as a credential authority: `legion.adapters.nia_credentials.NiaCredentialAuthority` behind
+  the generic `CredentialAuthority` port, configured with `provider: nia` under
+  `credential_authorities`, with its own issuer-role token and the identity block's agent map.
+  NIA's evidence is translated into Legion's generic shape and judged by Legion's own assessment.
+  A call without a resource gets no NIA credential (ADR 0021).
+- Legion's own call id (`legion_call_id`), derived from the event log, replaces the model's tool
+  call id as what credentials and approvals bind to. Approvals requested before the change are
+  invalidated on resume.
+- Generic additions: an optional external principal on credential requests and evidence,
+  `UnknownCredential`, and `IssuedCredential.also_scrub`. When evidence names a different
+  reference than the one handed over with the secret, the handed-over one is revoked.
+- Neither NIA adapter takes proxy settings from the environment.
 
 ### Phase 5B.1
 
@@ -14,7 +81,7 @@
   or [::1]); the name `localhost` is refused, since it can reach a different listener than meant.
   This applies to model providers with an API key and MCP servers too.
 - A stand-in NIA for tests (`tests/nia_lab.py`) and an integration test against a real `nia-api`
-  (`LEGION_TEST_NIA_BIN`). No NIA changes; NIA isn't used for credentials.
+  (`LEGION_TEST_NIA_BIN`). No NIA changes; NIA wasn't used for credentials yet (see Phase 5B.3).
 
 ### Phase 5A
 
