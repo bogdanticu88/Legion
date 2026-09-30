@@ -1,10 +1,10 @@
 # What an identity and credential authority has to provide
 
 This is the contract Legion needs from a credential authority, written from Legion's security
-requirements (ADR 0019), not from what any authority does today. NIA is the intended reference
-implementation; the last sections compare it with NIA as inspected on 2026-09-29 (commit
-`e6802a1`). Nothing here is implemented in NIA. Legion's NIA adapter (ADR 0020) uses NIA for identity and
-kill state only.
+requirements (ADR 0019), not from what any authority does today. NIA is one implementation, and
+optional. The gap analysis near the end compares the contract with NIA as inspected on 2026-09-29
+(commit `e6802a1`), before NIA's scoped credentials existed, and is kept as written then; "What's
+in use today" says what is implemented now (ADR 0020 for identity, ADR 0021 for credentials).
 
 Field classes used below:
 
@@ -146,9 +146,21 @@ Until then Legion treats MCP credentials as `declared` or `unverified` (ADR 0019
 
 ## What's in use today
 
-Phase 5B.1 uses NIA for identity and kill state only, through `IdentityPort` and
-`GET /agents/{ref}` (ADR 0020). Legion's operator token needs only NIA's viewer role. None of
-the credential contract above is in use.
+- Phase 5B.1: NIA for identity and kill state, through `IdentityPort` and `GET /agents/{ref}`
+  (ADR 0020), with a viewer-role token.
+- Phase 5B.3: NIA's scoped credentials (NIA phase 34, `40891e3`) behind the generic
+  `CredentialAuthority` port (ADR 0021), with a separate issuer-role token. Contract A is met
+  except where the table below says otherwise; B, C and D are not implemented.
+
+| Contract A | Status |
+|---|---|
+| request fields | all derived from Legion state; `call_id` is Legion's own call id; `principal` isn't sent (NIA doesn't know Legion's principals) |
+| resource | NIA requires one; a request without one is refused by the adapter |
+| response and evidence | translated to Legion's evidence shape; Legion's assessment decides |
+| `status` | active, expired, revoked; unknown and unavailable are refused |
+| `revoke` | NIA's revoke endpoint; NIA's gateway refuses a revoked credential at use |
+| replay | Legion refuses reuse in a run; NIA's gateway doesn't check the call at use |
+| trust | TLS channel only; evidence isn't signed |
 
 ## NIA today against this contract
 

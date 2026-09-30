@@ -86,3 +86,28 @@ Eight cases with a small local credential authority defined in the script:
 7. the credential is revoked before dispatch: refused
 8. the credential expires before a read is retried: a new one is issued for the same call, with
    the same authority, and the retry succeeds
+
+## G. NIA as the credential authority
+
+`examples/nia_credential_demo.py` (run by `tests/integration/test_nia_credentials_real.py` when
+`LEGION_TEST_NIA_BIN` is set). Needs a built `nia-api` from the NIA repository; nothing else in
+Legion needs NIA.
+
+```bash
+(cd ../nia && go build -o /tmp/nia-api ./cmd/api)
+LEGION_DEMO_NIA_BIN=/tmp/nia-api uv run python examples/nia_credential_demo.py
+```
+
+It starts `nia-api` on 127.0.0.1 with throwaway viewer, issuer and admin tokens, registers an
+agent and grants it `repo.read` on `repo-A`, then:
+
+1. a read of `repo-A`: NIA issues a credential for exactly that call; Legion finds it `bound` and
+   the tool gets it
+2. a write NIA never granted: NIA refuses to issue, the tool doesn't run
+3. a read of `repo-B`, never granted: refused the same way
+4. the agent is killed in NIA: the run is refused, and the credential from 1 is revoked
+5. restored and granted again: a new credential works, the one from 1 stays revoked
+6. the credential is revoked in NIA just before dispatch: refused, not reissued
+
+Each case prints the Legion call id the credential was bound to, the NIA principal the evidence
+named and the credential reference, never the credential.

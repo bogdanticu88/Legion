@@ -195,7 +195,8 @@ A tool that needs a credential names it (`credentials=["github"]`). The name is 
 secret reference, recorded as `unverified` on every call, or a mapping onto a credential
 authority (ADR 0019). For a mapped credential Legion builds the request from the authorized
 Action and the operator's mapping only (permissions per capability, the Action's resource, the
-task's identity, the Action hash, call id and Grant fingerprint), asks the authority, and checks
+task's identity, the Action hash, Legion's own call id and Grant fingerprint), asks the
+authority, and checks
 what comes back. Anything wider than the request is refused. Legion decides the assurance:
 `unverified`, `declared` (untrusted authority), `verified` (trusted authority) or `bound`
 (trusted, and bound to this call and Grant). The required level is the highest of
@@ -209,9 +210,16 @@ one, or one the authority can't vouch for, refuses the call. Each decision is re
 `legion credentials <run-id>` shows them.
 
 The check before dispatch is the last one Legion makes. What happens between it and the downstream
-system using the credential isn't something Legion can see; ADR 0019 describes that window. Legion
-has no production authority yet; NIA is meant to be one, and
-[docs/nia-integration-requirements.md](docs/nia-integration-requirements.md) says what it lacks.
+system using the credential isn't something Legion can see; ADR 0019 describes that window.
+
+The call id a credential is bound to is Legion's, derived from the `model.responded` event that
+recorded the call (ADR 0021). The model's or provider's tool call id is kept for the transcript
+and as provenance, and binds nothing.
+
+Authorities are plug-ins behind the port: an operator module (`module:`), or a built-in adapter
+(`provider: nia`, ADR 0021). The kernel sees only `CredentialAuthority`, `CredentialRequest` and
+generic evidence, and the conformance tests in `tests/conformance` hold every implementation to
+the same behaviour. The adapter is imported only when configured.
 
 ## Identity (NIA and MIA)
 
@@ -232,10 +240,14 @@ An action runs only if both Legion's grant and the external service allow it. Th
 covers the task's own identity and every ancestor's, so killing an agent stops everything it
 delegated to.
 
-`legion.adapters.nia` is the NIA adapter, configured under `identity:` in `legion.yaml` with an
-explicit map from Legion agent names to NIA refs. It talks to NIA's control plane over HTTP only,
-fails closed on anything it can't confirm, and isn't imported by the kernel. NIA isn't used as a
-credential authority, and its gateway isn't in front of Legion's tools; both are later phases.
+`legion.adapters.nia` is the NIA identity adapter, configured under `identity:` in `legion.yaml`
+with an explicit map from Legion agent names to NIA refs and a viewer-role token.
+`legion.adapters.nia_credentials` is the NIA credential authority (ADR 0021), configured under
+`credential_authorities:` with an issuer-role token and the same map. Both talk to NIA's control
+plane over HTTP only, fail closed on anything they can't confirm, and aren't imported unless
+configured; neither is needed to run Legion. A NIA credential used at NIA's gateway is checked
+there too (tool, resource, status, kill state), but the gateway doesn't see Legion's Action or
+call. Legion's tools don't go through the gateway unless a tool calls it.
 
 ## Failures
 

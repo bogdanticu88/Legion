@@ -147,9 +147,35 @@ uv run python examples/credential_demo.py    # eight cases, local, no API key
 ```
 
 This covers native tools. MCP servers hold their own credential for the whole process, so an MCP
-call is `declared` or `unverified` at best, and a stricter requirement refuses it. NIA is meant to
-be the real authority; what it would need is in
-[docs/nia-integration-requirements.md](docs/nia-integration-requirements.md).
+call is `declared` or `unverified` at best, and a stricter requirement refuses it.
+
+What a credential is bound to is Legion's own call id, derived from Legion's event log, not the
+tool call id the model or provider sent: two identical calls get different ids, and a retry or a
+resumed call keeps its id. The provider's id is kept as provenance.
+
+Authorities are optional and replaceable. One ships: NIA's scoped credentials, through
+`provider: nia` (ADR 0021). It is an adapter; Legion installs, runs and passes its tests without
+NIA, and adding or removing it is a `legion.yaml` change:
+
+```yaml
+credential_authorities:
+  nia:
+    provider: nia
+    endpoint: https://nia.internal:8080
+    credential: env:LEGION_NIA_ISSUER   # NIA's issuer role, separate from the identity token
+    audience: nia-gateway
+    trusted: true
+credentials:
+  github:
+    authority: nia
+    provider: nia-gateway
+    permissions: {repo.read: [repo.read]}
+```
+
+NIA issues only what the agent already holds in NIA's grants, for one resource; Legion checks the
+evidence like any other authority's, and a trusted NIA credential tied to the call reaches
+`bound`. That is Legion's check, not NIA's gateway checking the call: the gateway checks the
+credential's tools, resource, status and kill state when it's used, not which call it was for.
 
 ### MCP servers
 
@@ -247,8 +273,10 @@ can rewrite it or add to it. The log is tamper-evident against edits, not tamper
 - Children run one at a time; the parent waits. Several at once is the next step.
 - A static `env:` credential has whatever authority the secret has, for every call, parent or
   child; Legion records it as `unverified`. Only a credential mapped to a trusted credential
-  authority is issued per call and checked against the call (ADR 0019), and Legion ships no
-  production authority yet, NIA included.
+  authority is issued per call and checked against the call (ADR 0019).
+- NIA credentials need a resource, and NIA's grants pair no tool with a resource, so a NIA
+  credential can combine any tool and resource the agent holds. NIA's gateway doesn't check the
+  Action or call a credential was issued for (ADR 0021).
 - Credential assurance is what the trusted authority says, checked against the request. Legion
   can't see what the downstream system does with the credential, and nothing is signed, so it also
   trusts the channel to the authority.

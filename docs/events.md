@@ -52,7 +52,14 @@ and decimals as strings.
   written in one append. Its settlement and the parent's `task.resumed` come after the child's
   last event and before the parent's `tool.completed` for the delegate call.
 - A call can be proposed more than once (after a pause or crash). It's still one call: same
-  `call_id`, and repeat detection counts it once.
+  `call_id`, same `legion_call_id`, and repeat detection counts it once.
+- `call_id` is the tool call id the model or provider sent (renamed with a suffix if it repeats
+  an earlier one in the task). It keys the transcript and is kept as provenance; it binds nothing.
+  `legion_call_id` is Legion's own: `lc-` and 32 hex characters of the digest of the
+  `model.responded` event's `event_id` and the call's position among that response's tool calls.
+  Credentials and approvals bind to it. Events written before it existed don't carry the field;
+  it is derived from the log the same way, and a recorded value that doesn't match the
+  derivation fails replay.
 - For a call that needed approval, `approval.consumed` comes before its `action.authorized` and
   `tool.started`.
 - A paused run ends with `run.paused`, right after `task.awaiting_approval` or `task.blocked`,
@@ -87,12 +94,12 @@ and decimals as strings.
 | `model.requested` | `attempt`, `provider`, `model`, `message_count`, `tool_names`, `request_hash`, `max_output_tokens` | before each attempt. The request itself isn't stored since it comes from the transcript; the hash lets you compare two requests. Resume doesn't use it |
 | `model.responded` | `attempt`, `message`, `stop_reason`, `usage`, `cost_usd`, `latency_ms` | `message` is stored in full. `usage` has `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` |
 | `model.failed` | `attempt`, `error_code`, `message`, `disposition`, `will_retry`, `retry_in_ms` | |
-| `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope`, `credential_assurance` (`declared` if a scope was written, otherwise `unverified`) and, if the identity service reported one, `credential_evidence` (`source`, `subject`, `scopes`, `claimed_verified`) |
+| `action.proposed` | `call_id`, `legion_call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope`, `credential_assurance` (`declared` if a scope was written, otherwise `unverified`) and, if the identity service reported one, `credential_evidence` (`source`, `subject`, `scopes`, `claimed_verified`) |
 | `action.refused` | `call_id`, `tool`, `action_hash`, `reason_code`, `message` | the model gets `message`. `action_hash` is null if the call was refused before it became an Action |
 | `action.repeated` | `call_id`, `tool`, `repeat_key`, `count` | third or later identical call |
 | `action.authorized` | `call_id`, `action_hash`, `reasons`, `external` | grant, policy and external check all passed. `external` is what an external identity authority based its decision on (for NIA: `provider`, `ref`, `state`, `checked_at`), null without one |
 | `action.in_doubt` | `call_id`, `action_hash`, `effect`, `reason` | started, outcome unknown |
-| `tool.started` | `call_id`, `action_hash`, `attempt` | |
+| `tool.started` | `call_id`, `legion_call_id`, `action_hash`, `attempt` | |
 | `tool.completed` | `call_id`, `action_hash`, `content`, `is_error`, `artifact`, `truncated`, `redactions`, `latency_ms` | `content` is exactly what the model sees |
 | `tool.failed` | `call_id`, `action_hash`, `attempt`, `error_code`, `message`, `disposition`, `will_retry` | |
 | `budget.consumed` | `grant_id`, `dimension`, `amount`, `total` | anything charged |
@@ -108,12 +115,12 @@ and decimals as strings.
 | `task.resumed` | | |
 | `action.interrupted` | `call_id`, `action_hash`, `effect` | a safe-to-repeat call was running when the process stopped; it will run again |
 | `action.reconciled` | `call_id`, `action_hash`, `outcome` (`applied` or `not_applied`), `by`, `note` | an operator said what happened to an in-doubt action |
-| `approval.requested` | `approval_id`, `call_id`, `action_hash`, `binding_hash`, `subject`, `expires_at` | `subject` is what the approver is shown; `binding_hash` is what is enforced |
+| `approval.requested` | `approval_id`, `call_id`, `legion_call_id`, `action_hash`, `binding_hash`, `subject`, `expires_at` | `subject` is what the approver is shown; `binding_hash` is what is enforced, and covers `legion_call_id` |
 | `approval.granted`, `approval.denied` | `approval_id`, `by`, `note` | |
 | `approval.expired` | `approval_id` | noticed at use, at resume, or when someone tried to decide |
 | `approval.consumed` | `approval_id`, `call_id` | just before the approved call runs |
 | `approval.invalidated` | `approval_id`, `reason` | the call no longer matched what was approved |
-| `credential.resolved` | `call_id`, `action_hash`, `name`, `authority`, `assurance`, `required`, `principal`, `subject`, `grant_id`, `grant_fingerprint`, `provider`, `requested_permissions`, `requested_resource`, `permissions`, `resource`, `credential_ref`, `credential_ref_digest`, `revocation_ref`, `issued_at`, `expires_at`, `widened`, `problems` | a credential for this call, before the last check and `tool.started`. `authority` is `static` for an `env:` secret. `requested_*` is what Legion asked for; `permissions` and `resource` are what the evidence showed (empty when there was no usable evidence). `credential_ref` is the authority's identifier, never the secret; `credential_ref_digest` is what reuse within the run is checked against. Authority-supplied text is scrubbed of known secrets, then cleaned of control and invisible characters and cut to 200 characters |
+| `credential.resolved` | `call_id`, `legion_call_id`, `action_hash`, `name`, `authority`, `assurance`, `required`, `principal`, `subject`, `external_principal`, `evidenced_external_principal`, `grant_id`, `grant_fingerprint`, `provider`, `requested_permissions`, `requested_resource`, `permissions`, `resource`, `credential_ref`, `credential_ref_digest`, `revocation_ref`, `issued_at`, `expires_at`, `widened`, `problems` | a credential for this call, before the last check and `tool.started`. `authority` is `static` for an `env:` secret. `requested_*` is what Legion asked for; `permissions` and `resource` are what the evidence showed (empty when there was no usable evidence). `credential_ref` is the authority's identifier, never the secret; `credential_ref_digest` is what reuse within the run is checked against. `legion_call_id` is the call the credential was asked for and bound to. `external_principal` is the identity authority's id for the agent (asked for), `evidenced_external_principal` what the authority's evidence named (for NIA, the NIA agent ref). Authority-supplied text is scrubbed of known secrets, then cleaned of control and invisible characters and cut to 200 characters |
 | `credential.refused` | same fields | the credential was missing, too weak, wider than the call, expired again, revoked or unknown at the last check, or an MCP server's credential was below the requirement (`authority: server`). Followed by `action.refused` (`credential_refused`). `assurance` is null when the evidence contradicted the request; `widened` says whether it showed more than was asked for |
 
 ## Codes
