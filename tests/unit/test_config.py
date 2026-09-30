@@ -175,6 +175,8 @@ async def test_tool_setting_over_the_config_is_refused(project: Path) -> None:
     ("url", "access", "problem"),
     [
         ("http://models.example.com/v1", "api_key", "https"),
+        # the name reaches whichever of 127.0.0.1 and ::1 the client picks
+        ("http://localhost:11434/v1", "api_key", "https"),
         ("https://user:pw@models.example.com/v1", "none", "username or password"),
         ("file:///etc/passwd", "none", "http"),
         ("ftp://localhost/v1", "none", "http"),

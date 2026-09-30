@@ -32,7 +32,9 @@ class NoAuth:
         return {"kind": self.kind}
 
 
-_LOOPBACK = ("localhost", "127.0.0.1", "::1")
+# Literal addresses only. The name "localhost" resolves to 127.0.0.1 and ::1, and whatever listens
+# on the one the client picks gets the credential, which needn't be the service you meant.
+_LOOPBACK = ("127.0.0.1", "::1")
 
 
 def check_endpoint(url: str, *, carries_credentials: bool) -> None:
@@ -44,7 +46,10 @@ def check_endpoint(url: str, *, carries_credentials: bool) -> None:
     if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
         raise ValueError("the URL has to be http or https, with a host")
     if carries_credentials and parts.scheme.lower() != "https" and parts.hostname not in _LOOPBACK:
-        raise ValueError(f"{parts.hostname} gets credentials, so it needs https")
+        raise ValueError(
+            f"{parts.hostname} gets credentials, so it needs https (plain http only to 127.0.0.1 "
+            "or [::1])"
+        )
 
 
 class ApiKeyAccess:
