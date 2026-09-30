@@ -65,6 +65,8 @@ class ToolContext:
     credentials: Mapping[str, Secret] = field(default_factory=dict)
     settings: Mapping[str, str] = field(default_factory=dict)
     idempotency_key: str = ""
+    # Legion's own id for the call; call_id above is the provider's and binds nothing
+    legion_call_id: str = ""
 
 
 class ToolResult(BaseModel):

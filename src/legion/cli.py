@@ -511,7 +511,9 @@ def credentials(
     if not rows:
         out.print("no credentials in this run")
         return
-    table = Table("call", "who", "needs / got", "asked for", "evidence showed", "decision")
+    table = Table(
+        "call", "who", "needs / got", "asked for", "evidence showed", "credential", "decision"
+    )
     for row in rows:
         perms = ", ".join(row["requested_permissions"]) or "-"
         asked = f"{perms} on {row['requested_resource'] or '-'}"
@@ -523,12 +525,19 @@ def credentials(
         until = f" until {row['expires_at'][11:19]}" if row["expires_at"] else ""
         why = "; ".join(row["problems"])
         decision = f"{row['decision']} ({row['authority']}{until})" + (f": {why}" if why else "")
+        # Legion's call id is what the credential was bound to; the provider's is provenance.
+        # Runs recorded before Legion had its own call id show only the provider's.
+        legion_call = row.get("legion_call_id")
+        call_text = f"{legion_call} (model: {row['call_id']})" if legion_call else row["call_id"]
+        external = row.get("evidenced_external_principal") or row.get("external_principal")
+        who = f"{row['subject']}" + (f" as {external}" if external else "")
         table.add_row(
-            _safe(f"{row['tool'] or '?'} {row['call_id']}"),
-            _safe(f"{row['subject']} for {row['principal']}"),
+            _safe(f"{row['tool'] or '?'} {call_text}"),
+            _safe(f"{who} for {row['principal']}"),
             _safe(f"{row['required']} / {row['assurance'] or 'rejected'}"),
             _safe(asked),
             _safe(shown + ("  WIDER" if row["widened"] else "")),
+            _safe(row["credential_ref"] or "-"),
             _safe(decision),
         )
     out.print(table)
@@ -662,7 +671,8 @@ def describe(event: Event) -> str:
             return f"{p['error_code']}: {p['message']}{retry}"
         case EventType.ACTION_PROPOSED:
             resource = f" on {p['resource']}" if p["resource"] else ""
-            return f"{p['tool']}{resource} [{p['effect']}] {p['action_hash'][:12]}"
+            call = f" {p['legion_call_id']}" if p.get("legion_call_id") else ""
+            return f"{p['tool']}{resource} [{p['effect']}] {p['action_hash'][:12]}{call}"
         case EventType.ACTION_REFUSED:
             return f"{p['tool']}: {p['reason_code']}: {p['message']}"
         case EventType.ACTION_AUTHORIZED:
@@ -672,7 +682,7 @@ def describe(event: Event) -> str:
         case EventType.ACTION_IN_DOUBT:
             return f"{p['action_hash'][:12]} [{p['effect']}] {p['reason']}"
         case EventType.TOOL_STARTED:
-            return f"{p['call_id']} attempt {p['attempt']}"
+            return f"{p.get('legion_call_id') or p['call_id']} attempt {p['attempt']}"
         case EventType.TOOL_COMPLETED:
             extra = " truncated" if p["truncated"] else ""
             return f"{p['call_id']} {len(p['content'])} chars in {p['latency_ms']}ms{extra}"
@@ -712,7 +722,8 @@ def describe(event: Event) -> str:
         case EventType.CREDENTIAL_RESOLVED:
             scope = f"{', '.join(p['permissions'])} on {p['resource'] or 'any resource'}"
             what = f"{p['authority']}: {scope}" if p["authority"] != "static" else "static secret"
-            return f"{p['name']} {p['assurance']} ({what})"
+            ref = f" {p['credential_ref']}" if p.get("credential_ref") else ""
+            return f"{p['name']} {p['assurance']} ({what}){ref}"
         case EventType.CREDENTIAL_REFUSED:
             level = p["assurance"] or "rejected"
             return f"{p['name']} {level}, needs {p['required']}: {'; '.join(p['problems'])}"

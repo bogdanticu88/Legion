@@ -35,6 +35,19 @@ from legion.events.types import (
 )
 
 
+def legion_call_id(event_id: str, index: int) -> str:
+    """Legion's own identifier for one tool call.
+
+    Derived from the id Legion gave the model.responded event that recorded the call, and the
+    call's position among that response's tool calls. Nothing the model or the provider chose
+    goes into it, so a model can't pick another call's id; it is the same for every attempt of
+    the call and after any resume, and two identical calls get different ones. It is what
+    credentials, approvals and events bind to. The provider's tool call id (`call_id` in
+    events) is kept for the transcript and as provenance, and binds nothing.
+    """
+    return "lc-" + digest({"event": event_id, "index": index})[:32]
+
+
 def initial_prompt(task: dict[str, Any]) -> str:
     parts = [str(task["objective"])]
     if task.get("context"):
@@ -73,6 +86,8 @@ class TaskView:
     started: set[str] = field(default_factory=set)
     ended: set[str] = field(default_factory=set)
     approval_for_call: dict[str, str] = field(default_factory=dict)
+    # provider call id -> Legion call id, see legion_call_id
+    legion_calls: dict[str, str] = field(default_factory=dict)
     # the last model turn, so the loop (and resume) knows what is still open
     last_message: Message | None = None
     last_stop: str | None = None
@@ -252,6 +267,9 @@ def _model_responded(state: RunState, event: Event) -> None:
     p = ModelResponded.model_validate(event.payload)
     view = state.task(event)
     view.transcript.append(p.message)
+    for index, call in enumerate(p.message.tool_calls):
+        # the loop renames repeated provider ids before recording, so each is new here
+        view.legion_calls.setdefault(call.id, legion_call_id(event.event_id, index))
     view.last_message = p.message
     view.last_stop = p.stop_reason
     view.awaiting_finish = not p.message.tool_calls
@@ -292,6 +310,8 @@ def _credential(state: RunState, event: Event) -> None:
 def _action_proposed(state: RunState, event: Event) -> None:
     p = ActionProposed.model_validate(event.payload)
     view = state.task(event)
+    if p.legion_call_id is not None and p.legion_call_id != view.legion_calls.get(p.call_id):
+        raise ValueError(f"action.proposed for {p.call_id} names the wrong Legion call")
     # a call proposed again after a resume is still one call
     if p.call_id not in view.proposed:
         view.repeats[digest({"tool": p.tool, "arguments": p.arguments})] += 1

@@ -21,6 +21,7 @@ def binding(
     *,
     task: TaskRuntime,
     call: ToolCallPart,
+    legion_call_id: str,
     action: Action,
     tool: ToolSpec,
     settings: Mapping[str, str],
@@ -33,6 +34,9 @@ def binding(
         "run_id": task.run_id,
         "task_id": task.task_id,
         "call_id": call.id,
+        # Legion's own call id. Approvals requested before it was part of the binding no longer
+        # match and are invalidated on resume; they have to be asked for again.
+        "legion_call_id": legion_call_id,
         "agent": task.agent.name,
         "agent_spec_hash": task.agent.spec_hash,
         "tool": action.tool,
@@ -63,6 +67,7 @@ def subject(
     *,
     task: TaskRuntime,
     call: ToolCallPart,
+    legion_call_id: str,
     action: Action,
     tool: ToolSpec,
     objective: str,
@@ -74,6 +79,7 @@ def subject(
         "run_id": task.run_id,
         "task_id": task.task_id,
         "call_id": call.id,
+        "legion_call_id": legion_call_id,
         "agent": task.agent.name,
         "on_behalf_of": list(task.grant.identity.on_behalf_of),
         "objective": objective[:300],

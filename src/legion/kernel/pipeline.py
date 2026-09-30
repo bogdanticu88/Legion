@@ -91,6 +91,7 @@ class ActionPipeline:
                 resource=action.resource,
                 required=[str(c) for c in action.required],
                 remote=await self._remote(tool),
+                legion_call_id=self._call(task, call),
             ),
             correlation={"action_hash": action.hash},
         )
@@ -125,6 +126,11 @@ class ActionPipeline:
             return None
         await self._run(tool, call, action, task, minimum)
         return None
+
+    def _call(self, task: TaskRuntime, call: ToolCallPart) -> str:
+        # Legion's own id for this call, from the model.responded event that recorded it. Every
+        # call the loop runs was recorded first, so it is always there.
+        return self.k.state.tasks[task.task_id].legion_calls[call.id]
 
     async def _remote(self, tool: Tool) -> dict[str, Any] | None:
         # Where a remote tool runs and whose credential it uses there. Recorded for the audit
@@ -259,7 +265,12 @@ class ActionPipeline:
         await self.k.emit(
             task,
             EventType.TOOL_STARTED,
-            ev.ToolStarted(call_id=call.id, action_hash=action.hash, attempt=1),
+            ev.ToolStarted(
+                call_id=call.id,
+                action_hash=action.hash,
+                attempt=1,
+                legion_call_id=self._call(task, call),
+            ),
             {"action_hash": action.hash},
         )
         started = time.monotonic()
@@ -273,6 +284,7 @@ class ActionPipeline:
         bound = approvals.binding(
             task=task,
             call=call,
+            legion_call_id=self._call(task, call),
             action=action,
             tool=tool.spec,
             settings=self.k.settings,
@@ -296,12 +308,14 @@ class ActionPipeline:
                     subject=approvals.subject(
                         task=task,
                         call=call,
+                        legion_call_id=self._call(task, call),
                         action=action,
                         tool=tool.spec,
                         objective=str(view.spec.get("objective", "")),
                         model_note=note,
                     ),
                     expires_at=now + self.k.approval_ttl,
+                    legion_call_id=self._call(task, call),
                 ),
                 {"action_hash": action.hash, "approval_id": approval_id},
             )
@@ -394,7 +408,9 @@ class ActionPipeline:
                     action,
                     task.grant,
                     run_id=task.run_id,
-                    call_id=call.id,
+                    # Legion's id, not the model's: the model can't choose what this binds to
+                    call_id=self._call(task, call),
+                    external_principal=task.identity.external_id,
                     seen=set(self.k.state.credential_refs),
                     now=self.k.now(),
                     # before anything else is done with it, so it can't reach the log or the model
@@ -548,6 +564,7 @@ class ActionPipeline:
                 task_id=task.task_id,
                 agent=task.agent.name,
                 call_id=call.id,
+                legion_call_id=self._call(task, call),
                 credentials={n: g.secret for n, g in held.items() if g.secret is not None},
                 settings=self.k.settings,
                 # same value on every retry and after a resume, so an idempotent API can dedupe
@@ -556,7 +573,12 @@ class ActionPipeline:
             await self.k.emit(
                 task,
                 EventType.TOOL_STARTED,
-                ev.ToolStarted(call_id=call.id, action_hash=action.hash, attempt=attempt),
+                ev.ToolStarted(
+                    call_id=call.id,
+                    action_hash=action.hash,
+                    attempt=attempt,
+                    legion_call_id=self._call(task, call),
+                ),
                 correlation,
             )
             started = time.monotonic()
@@ -737,10 +759,15 @@ def _credential_payload(
         action_hash=action.hash,
         name=got.name,
         authority=text(got.authority),
+        legion_call_id=request.call_id if request else None,
         assurance=got.assurance.value if got.assurance is not None else None,
         required=got.required.value,
         principal=str(identity.principal),
         subject=identity.agent_ref,
+        external_principal=request.external_principal if request else None,
+        evidenced_external_principal=text(evidence.external_principal)
+        if evidence and evidence.external_principal
+        else None,
         grant_id=task.grant.id,
         grant_fingerprint=request.grant_fingerprint if request else None,
         provider=request.provider if request else None,

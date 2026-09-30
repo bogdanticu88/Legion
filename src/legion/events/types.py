@@ -158,6 +158,9 @@ class ModelFailed(_Payload):
 
 
 class ActionProposed(_Payload):
+    # call_id is the provider's tool call id: transcript key and provenance only.
+    # legion_call_id is Legion's own (see projections.legion_call_id); absent in events written
+    # before it existed, where it is derived from the log instead.
     call_id: str
     tool: str
     arguments: dict[str, Any]
@@ -168,6 +171,7 @@ class ActionProposed(_Payload):
     # for tools that run elsewhere (MCP): which server, which pinned definition, and what the
     # operator says the server's own credentials can do
     remote: dict[str, Any] | None = None
+    legion_call_id: str | None = None
 
 
 # action_hash is None when the call was refused before it became an Action
@@ -205,6 +209,7 @@ class ToolStarted(_Payload):
     call_id: str
     action_hash: str
     attempt: int
+    legion_call_id: str | None = None
 
 
 class ToolCompleted(_Payload):
@@ -285,6 +290,7 @@ class ApprovalRequested(_Payload):
     # what the human is shown; the binding hash is what gets enforced
     subject: dict[str, Any]
     expires_at: datetime
+    legion_call_id: str | None = None
 
 
 class ApprovalDecided(_Payload):
@@ -315,11 +321,16 @@ class CredentialUse(_Payload):
     action_hash: str
     name: str
     authority: str
+    # the call the credential was requested for, and what it is bound to
+    legion_call_id: str | None = None
     # the level reached (null when the evidence contradicted the request) and the level needed
     assurance: str | None
     required: str
     principal: str | None = None
     subject: str | None = None
+    # the identity authority's id for the subject, asked for and as evidenced
+    external_principal: str | None = None
+    evidenced_external_principal: str | None = None
     grant_id: str | None = None
     grant_fingerprint: str | None = None
     provider: str | None = None

@@ -178,6 +178,7 @@ def test_binding_changes_with_security_relevant_arguments(
         bound = approvals.binding(
             task=task,
             call=ToolCallPart(id="c1", name=tool_name, arguments=arguments),
+            legion_call_id="lc-test",
             action=action,
             tool=spec.spec,
             settings={},
