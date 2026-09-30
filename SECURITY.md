@@ -3,9 +3,12 @@
 ## Reporting
 
 Please report vulnerabilities privately through GitHub's "Report a vulnerability" button on the
-Security tab rather than in a public issue. Include the commit, what you found and how to
-reproduce it. I'll reply within 5 working days, and I'll credit you in the changelog unless you'd
-rather I didn't.
+Security tab rather than in a public issue. Include the version or commit, what you found, how to
+reproduce it and what an attacker gains. I'll reply within 5 working days, agree a fix and a
+disclosure date with you, and credit you in the changelog unless you'd rather I didn't.
+
+If the button isn't there, private reporting hasn't been switched on for this repository yet:
+open an issue asking for a private contact, without any details of the problem.
 
 ## In scope
 
@@ -31,4 +34,4 @@ rather I didn't.
 
 ## Supported versions
 
-Until 1.0, only the latest commit on `main`.
+Legion is alpha software. Until 1.0, fixes go into the latest release and `main` only.
