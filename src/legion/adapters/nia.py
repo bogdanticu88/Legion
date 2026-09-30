@@ -42,6 +42,21 @@ MAX_RESPONSE_BYTES = 64 * 1024
 _STATES = {"active": KillState.ACTIVE, "killed": KillState.KILLED, "suspended": KillState.KILLED}
 
 
+def nia_endpoint(value: str) -> str:
+    """Check a NIA endpoint that a token will be sent to. Shared by both NIA adapters."""
+    check_endpoint(value, carries_credentials=True)
+    parts = urlsplit(value)
+    # refs go in the path; a query or fragment here would move them somewhere else
+    if parts.query or parts.fragment or ";" in parts.path or value.rstrip().endswith("?"):
+        raise ValueError("the NIA endpoint can't have a query, fragment or parameters")
+    try:
+        httpx.URL(value).port  # noqa: B018
+        parts.port  # noqa: B018
+    except (httpx.InvalidURL, ValueError):
+        raise ValueError("the NIA endpoint's port isn't valid") from None
+    return value.rstrip("/")
+
+
 class NiaIdentityConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
@@ -60,17 +75,7 @@ class NiaIdentityConfig(BaseModel):
     @field_validator("endpoint")
     @classmethod
     def _endpoint(cls, value: str) -> str:
-        check_endpoint(value, carries_credentials=True)
-        parts = urlsplit(value)
-        # the ref goes in the path; a query or fragment here would move it somewhere else
-        if parts.query or parts.fragment or ";" in parts.path or value.rstrip().endswith("?"):
-            raise ValueError("the NIA endpoint can't have a query, fragment or parameters")
-        try:
-            httpx.URL(value).port  # noqa: B018
-            parts.port  # noqa: B018
-        except (httpx.InvalidURL, ValueError):
-            raise ValueError("the NIA endpoint's port isn't valid") from None
-        return value.rstrip("/")
+        return nia_endpoint(value)
 
     @field_validator("credential")
     @classmethod
@@ -107,6 +112,9 @@ class NiaIdentityPort:
             base_url=config.endpoint,
             timeout=httpx.Timeout(config.timeout_s),
             follow_redirects=False,
+            # no proxy, CA bundle or netrc from the environment: the token goes to the
+            # configured endpoint and nowhere else
+            trust_env=False,
             transport=transport,
             auth=_Bearer(resolver, SecretRef.parse(config.credential)),
             headers={"Accept-Encoding": "identity"},
@@ -241,9 +249,15 @@ class _Bearer(httpx.Auth):
     # Adds the token as the request goes out, so it's never a local in the adapter's own code
     # where a traceback would show it.
 
-    def __init__(self, resolver: CredentialResolver, ref: SecretRef) -> None:
+    def __init__(
+        self,
+        resolver: CredentialResolver,
+        ref: SecretRef,
+        error: Callable[[str], Exception] = IdentityUnavailable,
+    ) -> None:
         self._resolver = resolver
         self._ref = ref
+        self._error = error
 
     async def async_auth_flow(
         self, request: httpx.Request
@@ -252,7 +266,7 @@ class _Bearer(httpx.Auth):
         value = secret.reveal()
         # printable ASCII only: anything else can't be sent as a header value as it is
         if not all(0x21 <= ord(c) <= 0x7E for c in value):
-            raise IdentityUnavailable("Legion's NIA credential isn't a usable token")
+            raise self._error("Legion's NIA credential isn't a usable token")
         request.headers["Authorization"] = f"Bearer {value}"
         del secret, value
         yield request

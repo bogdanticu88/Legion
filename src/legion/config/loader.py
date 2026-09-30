@@ -127,7 +127,10 @@ class LegionConfig(_Strict):
     policy: PolicyConfig = PolicyConfig()
     # name -> env:NAME (static, unverified) or a mapping onto a credential authority
     credentials: dict[str, str | CredentialMapping] = Field(default_factory=dict)
-    credential_authorities: dict[str, CredentialAuthorityConfig] = Field(default_factory=dict)
+    # a module (operator code defining AUTHORITY), or a built-in adapter: `provider: nia`
+    credential_authorities: dict[str, CredentialAuthorityConfig | dict[str, Any]] = Field(
+        default_factory=dict
+    )
     credential_policy: CredentialPolicy = CredentialPolicy()
     # an external identity authority; without one, identities are local and never killed
     identity: dict[str, Any] | None = None
@@ -158,8 +161,23 @@ class LegionConfig(_Strict):
                 SecretRef.parse(ref)
         return value
 
+    @field_validator("credential_authorities")
+    @classmethod
+    def _authority_providers(
+        cls, value: dict[str, CredentialAuthorityConfig | dict[str, Any]]
+    ) -> dict[str, CredentialAuthorityConfig | dict[str, Any]]:
+        for cfg in value.values():
+            if isinstance(cfg, dict):
+                credential_authority_config(cfg)
+        return value
+
     @model_validator(mode="after")
     def _authorities(self) -> LegionConfig:
+        for name, cfg in self.credential_authorities.items():
+            if isinstance(cfg, dict):
+                check_credential_authority(
+                    name, cfg, self.identity, self.credential_policy.timeout_s
+                )
         for name, cred in self.credentials.items():
             if (
                 isinstance(cred, CredentialMapping)
@@ -179,6 +197,8 @@ class Loaded:
     providers: dict[str, ModelProvider] = field(default_factory=dict)
     identity: Any = None
     connections: list[Connection] = field(default_factory=list)
+    # adapters built from config (not operator modules), closed with everything else
+    built_authorities: list[Any] = field(default_factory=list)
 
     @property
     def root(self) -> Path:
@@ -206,6 +226,7 @@ class Loaded:
             **{
                 f"credential authority module {a.module}": self.resolve_path(a.module)
                 for a in self.config.credential_authorities.values()
+                if isinstance(a, CredentialAuthorityConfig)
             },
         }
         if self.config.agents_dir is not None:
@@ -232,6 +253,21 @@ class Loaded:
         identity_refs: list[SecretRef] = []
         if self.config.identity is not None:
             self.identity, identity_refs = build_identity(self.config.identity, env)
+        authorities: dict[str, CredentialAuthority] = {}
+        trusted: list[str] = []
+        for name, cfg in self.config.credential_authorities.items():
+            if isinstance(cfg, CredentialAuthorityConfig):
+                authorities[name] = load_authority_module(self.resolve_path(cfg.module), name)
+                is_trusted = cfg.trusted
+            else:
+                authority, ref, is_trusted = build_credential_authority(
+                    name, cfg, self.config.identity, env
+                )
+                authorities[name] = authority
+                self.built_authorities.append(authority)
+                identity_refs.append(ref)
+            if is_trusted:
+                trusted.append(name)
         legion = Legion(
             identity=self.identity,
             resolver=ModelResolver(self.config.models, self.providers),
@@ -248,13 +284,8 @@ class Loaded:
             credential_mappings={
                 k: v for k, v in self.config.credentials.items() if isinstance(v, CredentialMapping)
             },
-            credential_authorities={
-                name: load_authority_module(self.resolve_path(cfg.module), name)
-                for name, cfg in self.config.credential_authorities.items()
-            },
-            trusted_authorities=[
-                name for name, cfg in self.config.credential_authorities.items() if cfg.trusted
-            ],
+            credential_authorities=authorities,
+            trusted_authorities=trusted,
             credential_minimum=self.config.credential_policy.minimum,
             credential_timeout_s=self.config.credential_policy.timeout_s,
             secret_refs=[
@@ -345,6 +376,9 @@ class Loaded:
         if self.identity is not None:
             await self.identity.aclose()
             self.identity = None
+        for authority in self.built_authorities:
+            await authority.aclose()
+        self.built_authorities = []
         for conn in self.connections:
             await conn.aclose()
 
@@ -486,3 +520,36 @@ def build_identity(raw: dict[str, Any], env: EnvResolver) -> tuple[Any, list[Sec
 
     config = identity_config(raw)
     return NiaIdentityPort(config, env), [SecretRef.parse(config.credential)]
+
+
+def credential_authority_config(raw: dict[str, Any]) -> Any:
+    """Validate a built-in credential authority block. Adapters are only imported when asked."""
+    provider = raw.get("provider")
+    if provider == "nia":
+        from legion.adapters.nia_credentials import validate_config
+
+        return validate_config(raw)
+    raise ValueError(
+        f"unknown credential authority provider {provider!r}; use `module:` for your own"
+    )
+
+
+def check_credential_authority(
+    name: str, raw: dict[str, Any], identity: dict[str, Any] | None, kernel_timeout_s: float
+) -> None:
+    """Checks that need the rest of the config (for NIA: the identity block's mapping)."""
+    if raw.get("provider") == "nia":
+        from legion.adapters.nia_credentials import check
+
+        check(name, credential_authority_config(raw), identity, kernel_timeout_s)
+
+
+def build_credential_authority(
+    name: str, raw: dict[str, Any], identity: dict[str, Any] | None, env: EnvResolver
+) -> tuple[CredentialAuthority, SecretRef, bool]:
+    provider = raw.get("provider")
+    if provider == "nia":
+        from legion.adapters.nia_credentials import from_config
+
+        return from_config(name, raw, identity, env)
+    raise ConfigError(f"unknown credential authority provider {provider!r}")
