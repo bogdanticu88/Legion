@@ -25,6 +25,21 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
       - run: uv build
+      # the built wheel, installed in a fresh virtualenv, runs the offline quickstart
+      - run: scripts/wheel-smoke.sh dist/legion_runtime-*.whl
+
+  audit:
+    # known vulnerabilities in what a user installs (runtime dependencies and the mcp extra)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with: {python-version: "3.12"}
+      - run: >-
+          uv export --locked --all-extras --no-dev --no-emit-project --no-hashes
+          --format requirements-txt -o requirements-audit.txt
+      - run: uvx --from pip-audit==2.10.1 pip-audit --strict -r requirements-audit.txt
 
   base:
     # without the mcp extra: Legion has to work, and MCP tests are left out
