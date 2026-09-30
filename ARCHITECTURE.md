@@ -2,7 +2,8 @@
 
 Legion is a Python library with a CLI. It runs in one process on asyncio and stores its events in
 SQLite. The external things it talks to are the model endpoint and any MCP servers the operator
-configures (as subprocesses or over https). Parts marked with a phase aren't built yet; see [docs/roadmap.md](docs/roadmap.md).
+configures (as subprocesses or over https), and, only when configured, an identity or credential
+authority. Anything described here as not built yet is on [docs/roadmap.md](docs/roadmap.md).
 
 ## Layers
 
@@ -101,7 +102,8 @@ identity itself. Delegation is described below and in ADR 0016.
 
 Policy only runs for actions the grant already allows, and it can only say no. The built-in one is
 a list of rules matched on tool name, capability and effect class. Deny beats require-approval,
-which beats allow. OPA, Cedar, NIA or MIA could replace it behind the same interface. By default
+which beats allow. Another engine (OPA, Cedar, an external service) could replace it behind the
+same interface, from Python; see [docs/extending.md](docs/extending.md). By default
 `external_irreversible` tools require approval; listing `policy.rules` in `legion.yaml` replaces
 that default, so keep an equivalent rule. A rule whose `tool` or `capability` matches nothing that
 exists is refused at startup, since it would read like a control and do nothing.
@@ -137,7 +139,7 @@ the model. The live run applies each event to a `RunState` as it's written, and 
 the same state from storage and compares.
 
 Each event is hashed as `sha256(prev_hash + canonical_json(event without hash))`, starting from 64
-zeros per run. That's the same scheme MIA uses. SQLite triggers block `UPDATE` and `DELETE`.
+zeros per run. SQLite triggers block `UPDATE` and `DELETE`.
 `legion verify` also checks that each body names its run and that the `seq` and `type` columns
 agree with it, and refuses bodies with a duplicated JSON key. `inspect` refuses to show a run whose
 chain doesn't verify.
@@ -221,20 +223,23 @@ Authorities are plug-ins behind the port: an operator module (`module:`), or a b
 generic evidence, and the conformance tests in `tests/conformance` hold every implementation to
 the same behaviour. The adapter is imported only when configured.
 
-## Identity (NIA and MIA)
+## Identity
 
-Legion only enforces inside a single run. Identity, issuing credentials, per-agent grants, kill
-switches and risk across runs belong to an external service reached through `IdentityPort`. The
-default `NullIdentityPort` never kills and never vetoes.
+Legion only enforces inside a single run. Identity, per-agent grants, kill switches and risk
+across runs belong to an external service reached through `IdentityPort`, if one is configured.
+The default `NullIdentityPort` never kills and never vetoes, and Legion works fully with it.
 
-| Method | NIA today (ADR 0020) | MIA |
+| Method | What it answers | The NIA adapter (ADR 0020) |
 |---|---|---|
-| `agent_identity(name)` | mapped ref, looked up with `GET /agents/{ref}` | mandate subject |
-| `kill_state(identity)` | `effective_state` with a confirmed live kill check | mandate revoked or suspect |
-| `authorize(action, identity)` | identity state only; NIA has no per-action decision for Legion | `authz.authorize` |
-| `on_delegation(parent, child)` | both mapped and active, or refused; NIA records nothing | `mandates.delegate` |
-| `evidence(action_hash)` | nothing | audit |
-| `credential_evidence(server)` | nothing | - |
+| `agent_identity(name)` | who the agent is to the outside service | mapped ref, looked up with `GET /agents/{ref}` |
+| `kill_state(identity)` | whether it has been killed | `effective_state` with a confirmed live kill check |
+| `authorize(action, identity)` | an outside yes or no for this call | identity state only; NIA has no per-action decision for Legion |
+| `on_delegation(parent, child)` | whether this delegation may happen | both mapped and active, or refused |
+| `evidence(action_hash)` | outside evidence about a call | nothing |
+| `credential_evidence(server)` | what an MCP server's own credential can do | nothing |
+
+Other implementations (a mandate service, an internal IAM) would answer the same questions; none
+ships besides NIA's.
 
 An action runs only if both Legion's grant and the external service allow it. The kill check
 covers the task's own identity and every ancestor's, so killing an agent stops everything it

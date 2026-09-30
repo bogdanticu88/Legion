@@ -214,9 +214,13 @@ def show(number: int, title: str, expected: str, result: tuple[str, list[dict[st
                 f"asked {', '.join(r['requested_permissions'])} on {r['requested_resource']}, "
                 f"{evidenced}"
             )
+        # Legion's own call id is what a credential is bound to; the model's id (call_1 and so
+        # on) is kept only as provenance
+        call = r.get("legion_call_id") or r["call_id"]
         line = (
-            f"  credential {r['decision']}: {r['subject']} {r['call_id']} "
-            f"needs {r['required']}, got {r['assurance'] or 'rejected'}; {scope}"
+            f"  credential {r['decision']}: {r['subject']} call {call} "
+            f"(model's id {r['call_id']}) needs {r['required']}, "
+            f"got {r['assurance'] or 'rejected'}; {scope}"
         )
         print(line)
         if r["problems"]:

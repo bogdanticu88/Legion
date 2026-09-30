@@ -1,7 +1,7 @@
 # Threat model
 
 What Legion protects, what it only limits, and what it can't do anything about. "Now" means it's in
-the current code; otherwise the phase is given.
+the current code; "not built" means it isn't, and may never be.
 
 ## What's being protected
 
@@ -39,7 +39,7 @@ limits what the model can make happen.
 | MCP annotations lying about effects | The effect class comes from the manifest and defaults to `external_irreversible`. Annotations are recorded and shown, never used | now | An operator who sets `effect: read` on a tool that writes gets retries on it |
 | MCP result steering the model | Results are tool output: text only, images and blobs replaced, links never fetched, size, depth and item limits. Whatever the model then asks for is checked against the grant | now | The model can still use anything the grant allows |
 | MCP server acting and then failing | Failure before sending is clean. After sending, `pure`, `read` and `write_idempotent` tools are retryable (up to `max_attempts`, default 1 for MCP) and re-run on resume; `write` and `external_irreversible` go in doubt. A request for more input ends as an error | now | A server that did the work and returns an error looks like a clean failure. Legion sends no idempotency key to MCP servers, so only mark a tool `write_idempotent` if the server dedupes on its own |
-| MCP server credentials broader than the grant | The operator writes down `credential_scope`, recorded on every call and shown on approvals. `IdentityPort.credential_evidence` can report the real credential | interface now, NIA adapter later | Legion's grant limits which calls reach the server, not what the server's own credential allows. No end-to-end least privilege unless the server's credential is also narrow |
+| MCP server credentials broader than the grant | The operator writes down `credential_scope`, recorded on every call and shown on approvals. `IdentityPort.credential_evidence` can report the real credential | interface now; no shipped identity adapter reports it | Legion's grant limits which calls reach the server, not what the server's own credential allows. No end-to-end least privilege unless the server's credential is also narrow |
 | MCP server hanging or flooding | Connect and listing bounded by `discovery_timeout_s`, calls by `timeout_s`. Oversized responses are withheld from the model. Stdio stderr goes to a log file readable only by the user, not the terminal. Remote servers need https (plain http only to 127.0.0.1 or [::1]) and URLs can't carry credentials | now | The SDK reads a whole response into memory before Legion sees its size. The stderr log isn't scrubbed |
 | Poisoned tool output | Output schema checks, size limit, secret redaction | now | Schemas don't catch meaning |
 | Credential theft | Config holds references only, and config errors don't repeat rejected values. Every secret reference in the configuration (tool credentials, model API keys, MCP env and headers) is resolved when a run starts or resumes and scrubbed from every event and from tool output, keys included. Provider errors have the request's own headers removed | now | A tool that encodes or splits a secret gets past the scrubbing. Secrets under 4 characters aren't scrubbed. An MCP server's stderr log isn't scrubbed |
@@ -85,3 +85,66 @@ limits what the model can make happen.
 - Leaking data through something the grant allows, like writing it to a file someone else reads.
 - What any external agent runtime does, if one is ever added (ADR 0006).
 - What an MCP server does with its own credentials, whether or not Legion calls it.
+
+## Known limitations
+
+The complete list, for this release. None of them is fixed by anything above.
+
+Security:
+
+- Approvers aren't authenticated: an approval is whoever runs the CLI as the local OS user.
+  Nothing is signed.
+- The event log is tamper-evident, not tamper-proof. Whoever can write the store (the same OS
+  user, so also native tools and MCP stdio servers) can rewrite or extend it. `legion verify`
+  catches edited, reordered or missing events, not events cut off the end or a chain rewritten
+  from scratch. Cutting a run back to just after an approval makes resume run the approved call
+  again. There are no external checkpoints.
+- Native tools are trusted code, run in the Legion process without a sandbox.
+- Credentials are checked immediately before a call is dispatched, not when the downstream system
+  uses them. A revocation or kill in between isn't seen until the next check, and a call already
+  started isn't undone.
+- Credential assurance is what a trusted authority says, checked against the request. Nothing is
+  signed, so Legion also trusts its channel to the authority, and it can't see what the
+  downstream system does with the credential.
+- A static `env:` credential has whatever authority the secret has, for every call, parent or
+  child; Legion records it as `unverified`.
+- MCP servers hold one credential for the whole process: an MCP call is never more than
+  `declared`, and Legion's grant limits which calls reach a server, not what the server's own
+  credential allows.
+- Resources are compared as strings. A grant for `repo:legion*` also matches
+  `legion%2F..%2Fother`; a tool or server that decodes it may act on something else. Prefer exact
+  resources for remote tools.
+- Injected text can travel between agents in the context a parent passes down and the result a
+  child passes back. Grants limit what it can do.
+- With NIA configured: Legion trusts NIA's answers about identity and kill state, unsigned; NIA
+  credentials need a resource; NIA's grants pair no tool with a resource, so a NIA credential can
+  combine any tool and resource the agent holds; and NIA's gateway checks a credential's tools,
+  resource, status and kill state at use, not the Action or call it was issued for (ADR 0021).
+
+Operational:
+
+- One process, one machine. State is SQLite next to the project; locks are OS file locks.
+- Children run one at a time; the parent waits.
+- After a crash, `pure`, `read` and `write_idempotent` calls run again; `write` and
+  `external_irreversible` calls that may have happened wait for an operator. This isn't
+  exactly-once, and a wrongly declared effect class makes it wrong.
+- A tool that raises after it already did its work looks like a clean failure; tools should raise
+  `ActionInDoubt` when they don't know.
+- If a run fails or is cancelled while a write is running, the write is recorded as in doubt but
+  nothing asks anyone to reconcile it.
+- There's no command to cancel a paused run other than denying the approval or abandoning the
+  in-doubt action.
+- Time a tool spent hanging before a crash, and tokens of a response lost to a crash, aren't
+  charged. A child's wall time is charged only when it ends.
+- The token budget caps a call's output, not its input. Cost is checked after each call.
+- MCP: tools only, no resources or prompts. Pins cover how a server is reached and what it says
+  about its tools, not the code it runs (`npx some-server` without a version can change
+  underneath). The SDK reads a whole response into memory before Legion checks its size. A server
+  that acts and then reports an error looks like a clean failure. Server stderr is logged
+  unscrubbed to `.legion/mcp/<server>.stderr.log`.
+- No streaming or images. The operator declares what each model supports.
+- Tested on Linux (CI) and macOS, with Python 3.12 and 3.13. Windows has a code path for file
+  locks but isn't tested.
+- The OpenAI-compatible adapter has been run against a small local model (qwen2.5:1.5b on
+  Ollama), too small to use delegation, so delegation is tested only with scripted and generated
+  model output. The Anthropic adapter hasn't been run against the real API.

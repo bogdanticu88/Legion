@@ -146,13 +146,13 @@ Until then Legion treats MCP credentials as `declared` or `unverified` (ADR 0019
 
 ## What's in use today
 
-- Phase 5B.1: NIA for identity and kill state, through `IdentityPort` and `GET /agents/{ref}`
+- NIA as identity authority: identity and kill state, through `IdentityPort` and `GET /agents/{ref}`
   (ADR 0020), with a viewer-role token.
-- Phase 5B.3: NIA's scoped credentials (NIA phase 34, `40891e3`) behind the generic
-  `CredentialAuthority` port (ADR 0021), with a separate issuer-role token. Contract A is met
+- NIA as credential authority: NIA's scoped credentials (NIA commit `40891e3`) behind the generic
+  `CredentialAuthority` port (ADR 0021), with a separate issuer-role token. Section A is met
   except where the table below says otherwise; B, C and D are not implemented.
 
-| Contract A | Status |
+| Section A requirement | Status |
 |---|---|
 | request fields | all derived from Legion state; `call_id` is Legion's own call id; `principal` isn't sent (NIA doesn't know Legion's principals) |
 | resource | NIA requires one; a request without one is refused by the adapter |
@@ -162,7 +162,7 @@ Until then Legion treats MCP credentials as `declared` or `unverified` (ADR 0019
 | replay | Legion refuses reuse in a run; NIA's gateway doesn't check the call at use |
 | trust | TLS channel only; evidence isn't signed |
 
-## NIA today against this contract
+## NIA against this contract before its scoped credentials (historical, 2026-09-29)
 
 From reading NIA's code at `e6802a1` (not its README).
 
@@ -195,7 +195,7 @@ What NIA can do for Legion today: identity, kill state (and so the kill checks i
 downstream), issuance of agent-wide credentials, and revocation. What it can't: any credential
 narrower than an agent, which is what Legion's central invariant needs.
 
-## Phase 5B options
+## Options considered for NIA integration (historical)
 
 ### A. Extend NIA to the full contract
 
