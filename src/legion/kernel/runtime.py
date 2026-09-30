@@ -172,7 +172,14 @@ class Legion:
                 errors.append(f"tool {name} is unavailable: {self.tools.blocked[name]}")
         unknown = [t for t in unknown if t not in self.tools.blocked]
         if unknown:
-            errors.append(f"unknown tools: {', '.join(unknown)}")
+            known = sorted(self.tools.names())
+            listed = ", ".join(known[:10]) + (
+                f" and {len(known) - 10} more" if len(known) > 10 else ""
+            )
+            errors.append(
+                f"unknown tools: {', '.join(unknown)} (tools loaded from tool_modules and "
+                f"mcp_servers: {listed or 'none'})"
+            )
         resolved = None
         try:
             resolved = self.resolver.resolve(agent.model)

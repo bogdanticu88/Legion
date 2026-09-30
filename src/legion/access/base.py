@@ -7,6 +7,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from legion.access.secrets import CredentialResolver, SecretRef
+from legion.domain.errors import CredentialUnavailable
 
 
 class AuthScheme(StrEnum):
@@ -55,12 +56,25 @@ def check_endpoint(url: str, *, carries_credentials: bool) -> None:
 class ApiKeyAccess:
     kind = "api_key"
 
-    def __init__(self, ref: SecretRef, resolver: CredentialResolver) -> None:
+    def __init__(
+        self, ref: SecretRef, resolver: CredentialResolver, provider: str | None = None
+    ) -> None:
         self.ref = ref
         self._resolver = resolver
+        # the legion.yaml provider this key belongs to, for a message that says how to fix it
+        self._provider = provider
 
     async def headers(self, scheme: AuthScheme) -> dict[str, str]:
-        secret = await self._resolver.resolve(self.ref)
+        try:
+            secret = await self._resolver.resolve(self.ref)
+        except CredentialUnavailable:
+            if self._provider is None:
+                raise
+            raise CredentialUnavailable(
+                f"model provider {self._provider!r} needs {self.ref}, which isn't set. Set "
+                f"{self.ref.name} in the environment, or bind the agent's model profile to "
+                f"another provider in legion.yaml (`legion providers` lists them)"
+            ) from None
         if scheme is AuthScheme.X_API_KEY:
             return {"x-api-key": secret.reveal()}
         return {"authorization": f"Bearer {secret.reveal()}"}

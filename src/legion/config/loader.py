@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from dataclasses import dataclass, field
 from datetime import timedelta
 from fnmatch import fnmatchcase
@@ -56,7 +57,8 @@ class AccessConfig(_Strict):
         if self.kind == "none" and self.secret is not None:
             raise ValueError("`secret` is set but access kind is none")
         if self.secret is not None:
-            SecretRef.parse(self.secret)
+            # ConfigError, not ValueError, so pydantic doesn't copy the value into its error
+            SecretRef.parse(self.secret, "access.secret")
         return self
 
 
@@ -156,9 +158,10 @@ class LegionConfig(_Strict):
     @field_validator("credentials")
     @classmethod
     def _refs(cls, value: dict[str, str | CredentialMapping]) -> dict[str, str | CredentialMapping]:
-        for ref in value.values():
+        for name, ref in value.items():
             if isinstance(ref, str):
-                SecretRef.parse(ref)
+                # ConfigError, not ValueError, so pydantic doesn't copy the value into its error
+                SecretRef.parse(ref, f"credentials.{name}")
         return value
 
     @field_validator("credential_authorities")
@@ -243,7 +246,9 @@ class Loaded:
     async def build(self, store: SqliteEventStore | None = None) -> Legion:
         self.check_state_dir()
         env = EnvResolver()
-        self.providers = {name: self._provider(p, env) for name, p in self.config.providers.items()}
+        self.providers = {
+            name: self._provider(p, env, name) for name, p in self.config.providers.items()
+        }
         tools = ToolRegistry()
         for module in self.config.tool_modules:
             for tool in load_tool_module(self.resolve_path(module)):
@@ -333,7 +338,16 @@ class Loaded:
             return {}
         catalog: dict[str, AgentSpec] = {}
         for path in sorted(directory.glob("*.yaml")):
-            spec = load_agent(path)
+            try:
+                spec = load_agent(path)
+            except ConfigError as exc:
+                # Every run loads the whole directory, since any agent may delegate to another,
+                # so a broken file here stops runs of agents that are fine themselves.
+                raise ConfigError(
+                    f"{exc.message}\nEvery agent in {self.config.agents_dir}/ is loaded for "
+                    f"each run (any agent may delegate to another), so this stops all runs. Fix "
+                    f"{path.name} or move it out of {self.config.agents_dir}/."
+                ) from exc
             if spec.name in catalog:
                 raise ConfigError(f"two agents are called {spec.name!r} in {directory}")
             catalog[spec.name] = spec
@@ -382,10 +396,10 @@ class Loaded:
         for conn in self.connections:
             await conn.aclose()
 
-    def _provider(self, cfg: ProviderConfig, env: EnvResolver) -> ModelProvider:
+    def _provider(self, cfg: ProviderConfig, env: EnvResolver, name: str) -> ModelProvider:
         access: AccessProvider = NoAuth()
         if cfg.access.kind == "api_key" and cfg.access.secret:
-            access = ApiKeyAccess(SecretRef.parse(cfg.access.secret), env)
+            access = ApiKeyAccess(SecretRef.parse(cfg.access.secret), env, provider=name)
         if cfg.kind == "scripted":
             assert cfg.script is not None
             return ScriptedProvider.from_yaml(self.resolve_path(cfg.script))
@@ -461,6 +475,8 @@ def load_config(path: Path) -> Loaded:
         config = LegionConfig.model_validate(raw)
     except ValidationError as exc:
         raise _explain(path, exc) from exc
+    except ConfigError as exc:
+        raise ConfigError(f"{path} is invalid: {exc.message}") from None
     for cap in config.authority.grantable:
         try:
             Capability.parse(cap)
@@ -491,7 +507,14 @@ def load_authority_module(path: Path, name: str) -> CredentialAuthority:
     if spec is None or spec.loader is None:
         raise ConfigError(f"cannot import credential authority module {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Registered before it runs, as importlib's own recipe does: dataclasses and typing look the
+    # module up by name while the file is being executed.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     authority = getattr(module, "AUTHORITY", None)
     if authority is None or not callable(getattr(authority, "issue", None)):
         raise ConfigError(f"{path} must define AUTHORITY with an issue() method")

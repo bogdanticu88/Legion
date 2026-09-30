@@ -19,10 +19,15 @@ class SecretRef(BaseModel):
     name: str
 
     @classmethod
-    def parse(cls, text: str) -> SecretRef:
+    def parse(cls, text: str, where: str | None = None) -> SecretRef:
         match = _REF.match(text)
         if not match:
             # the value may be a pasted secret, so it isn't repeated in the error
+            if where is not None:
+                raise ConfigError(
+                    f"{where} must be a secret reference like env:NAME, naming an environment "
+                    f"variable (the value isn't shown here in case it is a secret)"
+                )
             raise ConfigError("not a secret reference: expected env:NAME")
         return cls(scheme="env", name=match.group(2))
 
@@ -61,7 +66,9 @@ class EnvResolver:
     async def resolve(self, ref: SecretRef) -> Secret:
         value = self._environ.get(ref.name)
         if not value:
-            raise CredentialUnavailable(f"{ref} is not set")
+            raise CredentialUnavailable(
+                f"{ref} is not set: environment variable {ref.name} is empty or missing"
+            )
         return Secret(value)
 
     def available(self, ref: SecretRef) -> bool:

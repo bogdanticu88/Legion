@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from legion.access.base import check_endpoint
 from legion.access.secrets import CredentialResolver, SecretRef
@@ -72,9 +72,11 @@ class McpServerConfig(BaseModel):
 
     @field_validator("env", "headers")
     @classmethod
-    def _refs(cls, value: dict[str, str]) -> dict[str, str]:
-        for ref in value.values():
-            SecretRef.parse(ref)
+    def _refs(cls, value: dict[str, str], info: ValidationInfo) -> dict[str, str]:
+        # ConfigError, not ValueError: pydantic would put the rejected value, possibly a pasted
+        # secret, into its own error text
+        for key, ref in value.items():
+            SecretRef.parse(ref, f"{info.field_name}.{key}")
         return value
 
     def check(self, server_id: str) -> None:
@@ -484,6 +486,9 @@ def check_servers(servers: Mapping[str, McpServerConfig]) -> None:
     if servers and importlib.util.find_spec("mcp") is None:
         # not "pip install legion[mcp]": the legion package on PyPI is someone else's project, and
         # legion-runtime isn't published
-        raise ConfigError("mcp_servers needs the MCP SDK: run `uv sync --extra mcp`")
+        raise ConfigError(
+            "mcp_servers needs the MCP SDK: run `uv sync --extra mcp` in a source checkout, or "
+            "`pip install 'legion-runtime[mcp]'`"
+        )
     for server_id, config in servers.items():
         config.check(server_id)

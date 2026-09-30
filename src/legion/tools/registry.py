@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -53,7 +54,14 @@ def load_tool_module(path: Path) -> list[Tool]:
     if spec is None or spec.loader is None:
         raise ConfigError(f"cannot import tool module {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Registered before it runs, as importlib's own recipe does: dataclasses and typing look the
+    # module up by name while the file is being executed.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     tools = getattr(module, "TOOLS", None)
     if not isinstance(tools, list):
         raise ConfigError(f"{path} must define TOOLS as a list")
