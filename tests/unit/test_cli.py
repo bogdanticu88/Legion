@@ -49,6 +49,13 @@ def test_init_does_not_overwrite(project: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_init_prints_a_cd_line_that_can_be_copied(tmp_path: Path) -> None:
+    target = tmp_path / ("a-rather-long-directory-name-" * 4) / "legion-demo"
+    result = runner.invoke(app, ["init", str(target)], terminal_width=60)
+    assert result.exit_code == 0, result.output
+    assert f"  cd {target}\n" in result.output
+
+
 @pytest.mark.demo  # A: injected instruction vs grant
 def test_end_to_end(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(project)
@@ -179,3 +186,79 @@ def test_tools_cannot_be_pointed_at_the_state_directory(project: Path) -> None:
     code, out = cli(project, "agent", "validate", str(project / "agents" / "assistant.yaml"))
     assert code == 2
     assert "state directory" in out
+
+
+def test_run_says_legion_refused_the_call(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(project)
+    code, out = cli(project, "run", "agents/assistant.yaml", "Summarize the notes")
+    assert code == 0, out
+    first = out.splitlines()[0]
+    assert first.endswith("completed; Legion refused 1 action (capability_denied)"), first
+    assert "Refused by Legion (the model asked; no tool code ran):" in out
+    assert "read_note: capability_denied" in out and "private/salaries.md" in out
+    assert "details: legion inspect run_" in out
+
+    code, out = cli(project, "run", "agents/assistant.yaml", "Summarize the notes", "--json")
+    outcome = json.loads(out)
+    assert outcome["refused"] == [{"tool": "read_note", "reason_code": "capability_denied"}]
+
+
+def test_run_summary_is_quiet_when_nothing_was_refused(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (project / "scripts" / "assistant.yaml").write_text(
+        "- tool_calls:\n"
+        "    - name: read_note\n"
+        "      arguments: {path: notes/ideas.md}\n"
+        "- text: done\n"
+    )
+    monkeypatch.chdir(project)
+    code, out = cli(project, "run", "agents/assistant.yaml", "go")
+    assert code == 0, out
+    assert "Refused by Legion" not in out and "Legion refused" not in out
+
+
+def test_delegated_refusals_count_for_the_run(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the coordinator's child makes the refused call; the run's summary still reports it
+    monkeypatch.chdir(project)
+    _, out = cli(project, "run", "agents/coordinator.yaml", "Get the notes summarised")
+    assert "Legion refused 1 action (capability_denied)" in out.splitlines()[0]
+
+
+def test_run_summary_never_shows_a_secret(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A model that puts a configured secret into a refused call's arguments: the summary is
+    # built from the recorded (scrubbed) events, so the value isn't printed.
+    secret = "summary-CANARY-9d1f3b7a5c2e"
+    monkeypatch.setenv("NOTES_TOKEN", secret)
+    import yaml
+
+    config = project / "legion.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["credentials"] = {**(data.get("credentials") or {}), "notes": "env:NOTES_TOKEN"}
+    config.write_text(yaml.safe_dump(data))
+    script = project / "scripts" / "assistant.yaml"
+    script.write_text(
+        "- tool_calls:\n"
+        "    - name: read_note\n"
+        f"      arguments: {{path: private/{secret}.md}}\n"
+        "- text: done\n"
+    )
+    monkeypatch.chdir(project)
+    _, out = cli(project, "run", "agents/assistant.yaml", "go")
+    assert "Legion refused 1 action" in out
+    assert secret not in out
+
+
+def test_approval_shows_legions_call_id(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # the approval is bound to Legion's call id; the model's id is only shown next to it
+    monkeypatch.chdir(project)
+    code, out = cli(project, "run", "agents/publisher.yaml", "Publish the meeting summary")
+    assert code == 3, out
+    approval = re.search(r"apr_[0-9a-f]{16}", out)
+    assert approval, out
+    result = runner.invoke(app, ["approval", "show", approval.group(0)], terminal_width=200)
+    out = result.output
+    assert result.exit_code == 0, out
+    assert re.search(r"call\s+lc-[0-9a-f]{32} \(model's id call_\w+\)", out), out

@@ -27,7 +27,10 @@ from legion.kernel import operator
 from legion.kernel.runtime import Legion, RunOutcome, load_state
 from legion.tools.mcp import discover, unpinned_package
 
-app = typer.Typer(help="Legion: run agents through one enforcement path.", no_args_is_help=True)
+app = typer.Typer(
+    help="Legion: the model decides which tool calls to make; Legion decides which run.",
+    no_args_is_help=True,
+)
 agent_app = typer.Typer(help="Work with agent definitions.", no_args_is_help=True)
 approval_app = typer.Typer(help="Inspect approvals.", no_args_is_help=True)
 mcp_app = typer.Typer(help="Check MCP servers against their manifests.", no_args_is_help=True)
@@ -68,6 +71,26 @@ def _load(path: Path) -> Loaded:
         raise typer.Exit(2) from exc
 
 
+def _version(value: bool) -> None:
+    if value:
+        from legion import __version__
+
+        out.print(f"legion {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version", callback=_version, is_eager=True, help="Print the version and exit."
+        ),
+    ] = False,
+) -> None:
+    """Legion: the model decides which tool calls to make; Legion decides which run."""
+
+
 @app.command()
 def init(
     directory: Annotated[Path, typer.Argument(help="Where to create the project.")] = Path("."),
@@ -78,8 +101,12 @@ def init(
         err.print("nothing written: files already exist")
         raise typer.Exit(1)
     for path in created:
-        out.print(f"created {path}")
-    out.print('\nnext: legion run agents/assistant.yaml "Summarize the notes"')
+        out.print(f"created {_safe(path)}", soft_wrap=True)
+    step = "" if directory == Path(".") else f"  cd {_safe(directory)}\n"
+    # soft_wrap: a long path must stay on one line to be copied
+    out.print(
+        f'\nnext:\n{step}  legion run agents/assistant.yaml "Summarize the notes"', soft_wrap=True
+    )
 
 
 @app.command()
@@ -151,7 +178,27 @@ def _principal() -> Principal:
 EXIT_PAUSED = 3
 
 
-def _report(outcome: RunOutcome, loaded: Loaded, as_json: bool) -> None:
+REFUSALS_SHOWN = 5
+
+
+def _refusals(events: list[Event]) -> list[dict[str, str]]:
+    # What Legion refused in this run, from the log: the model asked, Legion said no. Messages
+    # were scrubbed of known secrets when they were recorded.
+    return [
+        {
+            "tool": str(e.payload["tool"]),
+            "reason_code": str(e.payload["reason_code"]),
+            "message": str(e.payload["message"]),
+        }
+        for e in events
+        if e.type is EventType.ACTION_REFUSED
+    ]
+
+
+def _report(
+    outcome: RunOutcome, loaded: Loaded, as_json: bool, events: list[Event] | None = None
+) -> None:
+    refused = _refusals(events or [])
     if as_json:
         print(
             json.dumps(
@@ -164,17 +211,38 @@ def _report(outcome: RunOutcome, loaded: Loaded, as_json: bool) -> None:
                     "error": outcome.error_message,
                     "approval_id": outcome.approval_id,
                     "blocked_call": outcome.blocked_call,
+                    "refused": [
+                        {"tool": r["tool"], "reason_code": r["reason_code"]} for r in refused
+                    ],
                 }
             )
         )
     else:
-        out.print(f"run {outcome.run_id}: {outcome.status.value}")
+        status = outcome.status.value
+        if refused:
+            codes = sorted({r["reason_code"] for r in refused})
+            noun = "action" if len(refused) == 1 else "actions"
+            status += f"; Legion refused {len(refused)} {noun} ({', '.join(codes)})"
+        out.print(f"run {outcome.run_id}: {_safe(status)}")
         if outcome.output:
             out.print(_safe(outcome.output))
+        if refused:
+            # The model's own words above can make it sound as if it chose not to. These are
+            # calls it made that Legion refused before any tool code ran.
+            out.print("\n[bold]Refused by Legion[/bold] (the model asked; no tool code ran):")
+            for r in refused[:REFUSALS_SHOWN]:
+                line = f"{r['tool']}: {r['reason_code']}: {r['message'][:160]}"
+                out.print(f"  {_safe(line)}")
+            if len(refused) > REFUSALS_SHOWN:
+                out.print(f"  ... and {len(refused) - REFUSALS_SHOWN} more")
+            out.print(f"details: legion inspect {outcome.run_id}")
         if outcome.error_code:
             out.print(f"[red]{_safe(outcome.error_code)}[/red]: {_safe(outcome.error_message)}")
         if outcome.approval_id:
-            out.print("\n[bold]Approval required[/bold]")
+            out.print(
+                "\n[bold]Approval required.[/bold] The run is paused until someone approves or "
+                "denies this exact call; nothing else is covered by the approval."
+            )
             _show_approval(loaded, outcome.approval_id)
             out.print(
                 f"\nlegion approve {outcome.approval_id}   or   legion deny {outcome.approval_id}"
@@ -204,22 +272,23 @@ def run(
     """Run an agent on an objective. Exits 3 if the run pauses for a human."""
     loaded = _load(config)
 
-    async def go() -> RunOutcome:
+    async def go() -> tuple[RunOutcome, list[Event]]:
         store = loaded.store()
         try:
             legion = await loaded.build(store)
             agent = load_agent(agent_file)
-            return await legion.run(agent, objective, principal=_principal())
+            outcome = await legion.run(agent, objective, principal=_principal())
+            return outcome, await store.read(outcome.run_id)
         finally:
             await loaded.aclose()
             store.close()
 
     try:
-        outcome = _run(go())
+        outcome, events = _run(go())
     except LegionError as exc:
         err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
-    _report(outcome, loaded, as_json)
+    _report(outcome, loaded, as_json, events)
 
 
 @app.command()
@@ -231,20 +300,21 @@ def resume(
     """Continue a paused or crashed run from its event log."""
     loaded = _load(config)
 
-    async def go() -> RunOutcome:
+    async def go() -> tuple[RunOutcome, list[Event]]:
         store = loaded.store()
         try:
-            return await (await loaded.build(store)).resume(run_id, principal=_principal())
+            outcome = await (await loaded.build(store)).resume(run_id, principal=_principal())
+            return outcome, await store.read(outcome.run_id)
         finally:
             await loaded.aclose()
             store.close()
 
     try:
-        outcome = _run(go())
+        outcome, events = _run(go())
     except LegionError as exc:
         err.print(f"[red]error:[/red] {_safe(exc.message)}")
         raise typer.Exit(2) from exc
-    _report(outcome, loaded, as_json)
+    _report(outcome, loaded, as_json, events)
 
 
 def _origin_rows(origin: Any) -> list[tuple[str, str]]:
@@ -255,6 +325,13 @@ def _origin_rows(origin: Any) -> list[tuple[str, str]]:
         ("runs on", f"MCP server {origin.get('server')} as {origin.get('remote_tool')}"),
         ("server credential", f"{scope} (Legion's grant doesn't narrow this)"),
     ]
+
+
+def _call_text(legion_call_id: object, model_call_id: str) -> str:
+    # Legion's id is the one approvals and credentials are bound to; the model's is provenance
+    if not legion_call_id:
+        return model_call_id
+    return f"{legion_call_id} (model's id {model_call_id})"
 
 
 def _show_approval(loaded: Loaded, approval_id: str) -> None:
@@ -271,7 +348,8 @@ def _show_approval(loaded: Loaded, approval_id: str) -> None:
             "status",
             approval.status + (" (expired)" if expired and approval.status == "requested" else ""),
         ),
-        ("run", f"{state.run_id}   task {approval.task_id}   call {approval.call_id}"),
+        ("run", f"{state.run_id}   task {approval.task_id}"),
+        ("call", _call_text(s.get("legion_call_id"), approval.call_id)),
         ("agent", f"{s.get('agent')} acting for {', '.join(s.get('on_behalf_of', []))}"),
         ("objective", str(s.get("objective", ""))),
         ("tool", f"{s.get('tool')}: {s.get('description', '')}"),
@@ -527,8 +605,7 @@ def credentials(
         decision = f"{row['decision']} ({row['authority']}{until})" + (f": {why}" if why else "")
         # Legion's call id is what the credential was bound to; the provider's is provenance.
         # Runs recorded before Legion had its own call id show only the provider's.
-        legion_call = row.get("legion_call_id")
-        call_text = f"{legion_call} (model: {row['call_id']})" if legion_call else row["call_id"]
+        call_text = _call_text(row.get("legion_call_id"), row["call_id"])
         external = row.get("evidenced_external_principal") or row.get("external_principal")
         who = f"{row['subject']}" + (f" as {external}" if external else "")
         table.add_row(
