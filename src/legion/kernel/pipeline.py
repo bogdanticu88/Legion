@@ -224,6 +224,7 @@ class ActionPipeline:
                 call_id=call.id,
                 action_hash=action.hash,
                 reasons=[*decision.reasons, f"{external.source}: {external.reason}"],
+                external=dict(external.details) or None,
             ),
             correlation={"action_hash": action.hash},
         )

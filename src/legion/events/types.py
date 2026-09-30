@@ -183,6 +183,8 @@ class ActionAuthorized(_Payload):
     call_id: str
     action_hash: str
     reasons: list[str]
+    # what an external identity authority based its decision on, when there is one
+    external: dict[str, str] | None = None
 
 
 class ActionRepeated(_Payload):

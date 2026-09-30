@@ -233,4 +233,7 @@ class Kernel:
         # a killed ancestor stops its whole subtree
         for identity in (*task.lineage, task.identity):
             if await self.identity.kill_state(identity) is KillState.KILLED:
-                raise Killed(f"{identity.source} reports agent {identity.agent_ref} killed")
+                known_as = f" ({identity.external_id})" if identity.external_id else ""
+                raise Killed(
+                    f"{identity.source} reports agent {identity.agent_ref}{known_as} killed"
+                )

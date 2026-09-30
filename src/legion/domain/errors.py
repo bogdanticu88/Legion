@@ -172,6 +172,17 @@ class Killed(LegionError):
     code = "killed"
 
 
+class IdentityUnknown(LegionError):
+    # the configured identity authority has no record of this agent, or no mapping names it
+    code = "identity_unknown"
+
+
+class IdentityUnavailable(LegionError):
+    # the configured identity authority couldn't be asked, or its answer can't be used; without
+    # an answer nothing runs
+    code = "identity_unavailable"
+
+
 class DeadlineExceeded(LegionError):
     code = "deadline_exceeded"
 

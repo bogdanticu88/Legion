@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -29,6 +30,8 @@ class ExternalDecision:
     allowed: bool
     source: str
     reason: str = ""
+    # what the decision was based on, recorded on action.authorized; never secrets
+    details: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
