@@ -1,4 +1,6 @@
-# Legion
+<p align="center">
+  <img src="docs/assets/legion.jpg" alt="Legion: execution control for LLM agents" width="600">
+</p>
 
 Legion is a small Python runtime that sits between an LLM agent and its tools. The model decides
 which tool calls it wants to make; Legion decides which of them run.
