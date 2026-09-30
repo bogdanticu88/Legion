@@ -1,6 +1,6 @@
 # What any CredentialAuthority has to do for Legion, run against every implementation there is:
-# the deterministic lab authority, and NIA's scoped credentials through the NIA adapter (against
-# the NIA stand-in, so no NIA process is needed). A Vault or cloud IAM authority would be added
+# the deterministic lab authority, the example in examples/authorities.py, and NIA's scoped
+# credentials through the NIA adapter (against the NIA stand-in, so no NIA process is needed). A Vault or cloud IAM authority would be added
 # to AUTHORITIES and held to the same tests.
 
 from __future__ import annotations
@@ -67,7 +67,18 @@ async def nia() -> AsyncIterator[tuple[Any, str]]:
             await auth.aclose()
 
 
-AUTHORITIES: dict[str, Callable[[], Any]] = {"lab": lab, "nia": nia}
+@asynccontextmanager
+async def example() -> AsyncIterator[tuple[Any, str]]:
+    # examples/authorities.py, loaded the way legion.yaml loads it
+    from pathlib import Path
+
+    from legion.config.loader import load_authority_module
+
+    path = Path(__file__).resolve().parents[2] / "examples" / "authorities.py"
+    yield load_authority_module(path, "local"), "github"
+
+
+AUTHORITIES: dict[str, Callable[[], Any]] = {"lab": lab, "example": example, "nia": nia}
 
 
 @pytest.fixture(params=sorted(AUTHORITIES))
