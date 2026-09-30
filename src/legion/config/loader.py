@@ -129,6 +129,16 @@ class LegionConfig(_Strict):
     credentials: dict[str, str | CredentialMapping] = Field(default_factory=dict)
     credential_authorities: dict[str, CredentialAuthorityConfig] = Field(default_factory=dict)
     credential_policy: CredentialPolicy = CredentialPolicy()
+    # an external identity authority; without one, identities are local and never killed
+    identity: dict[str, Any] | None = None
+
+    @field_validator("identity")
+    @classmethod
+    def _identity(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is not None:
+            identity_config(value)
+        return value
+
     retry: RetryConfig = RetryConfig()
     approvals: ApprovalConfig = ApprovalConfig()
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
@@ -167,6 +177,7 @@ class Loaded:
     config: LegionConfig
     config_hash: str
     providers: dict[str, ModelProvider] = field(default_factory=dict)
+    identity: Any = None
     connections: list[Connection] = field(default_factory=list)
 
     @property
@@ -218,7 +229,11 @@ class Loaded:
                 tools.register(tool)
         for server_id, server in self.config.mcp_servers.items():
             await self._register_mcp(server_id, server, env, tools)
+        identity_refs: list[SecretRef] = []
+        if self.config.identity is not None:
+            self.identity, identity_refs = build_identity(self.config.identity, env)
         legion = Legion(
+            identity=self.identity,
             resolver=ModelResolver(self.config.models, self.providers),
             tools=tools,
             store=store or self.store(),
@@ -246,7 +261,8 @@ class Loaded:
                 SecretRef.parse(p.access.secret)
                 for p in self.config.providers.values()
                 if p.access.secret is not None
-            ],
+            ]
+            + identity_refs,
             artifacts=FileArtifactStore(self.resolve_path(self.config.artifacts)),
             settings={**self.config.tool_settings, "config_dir": str(self.root)},
             retry=RetryPolicy(**self.config.retry.model_dump()),
@@ -326,6 +342,9 @@ class Loaded:
     async def aclose(self) -> None:
         for provider in self.providers.values():
             await provider.aclose()
+        if self.identity is not None:
+            await self.identity.aclose()
+            self.identity = None
         for conn in self.connections:
             await conn.aclose()
 
@@ -447,3 +466,23 @@ def load_authority_module(path: Path, name: str) -> CredentialAuthority:
             f"{path} defines authority {getattr(authority, 'name', None)!r}, not {name!r}"
         )
     return authority  # type: ignore[no-any-return]
+
+
+def identity_config(raw: dict[str, Any]) -> Any:
+    """Validate an `identity:` block. Adapters are only imported when they're asked for."""
+    provider = raw.get("provider")
+    if provider == "nia":
+        from legion.adapters.nia import NiaIdentityConfig
+
+        try:
+            return NiaIdentityConfig.model_validate(raw)
+        except ValidationError as exc:
+            raise ValueError("; ".join(e["msg"] for e in exc.errors()[:5])) from None
+    raise ValueError(f"unknown identity provider {provider!r}")
+
+
+def build_identity(raw: dict[str, Any], env: EnvResolver) -> tuple[Any, list[SecretRef]]:
+    from legion.adapters.nia import NiaIdentityPort
+
+    config = identity_config(raw)
+    return NiaIdentityPort(config, env), [SecretRef.parse(config.credential)]
