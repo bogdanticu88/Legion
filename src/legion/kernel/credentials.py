@@ -31,6 +31,7 @@ from legion.ports.credentials import (
     CredentialRequest,
     CredentialStatus,
     IssuedCredential,
+    UnknownCredential,
 )
 
 # an authority's clock may be a little off from ours
@@ -115,8 +116,10 @@ def derive_request(
     *,
     run_id: str,
     call_id: str,
+    external_principal: str | None = None,
 ) -> CredentialRequest | str:
-    """The request an authorized Action implies, or why there isn't one."""
+    """The request an authorized Action implies, or why there isn't one. `call_id` is Legion's
+    own call id, `external_principal` the identity authority's id for the acting agent."""
     permissions: set[str] = set()
     for cap in action.required:
         mapped = mapping.permissions.get(cap.name)
@@ -141,6 +144,7 @@ def derive_request(
         grant_fingerprint=grant_fingerprint(grant),
         tool=action.tool,
         max_lifetime_s=mapping.max_lifetime_s,
+        external_principal=external_principal,
     )
 
 
@@ -193,6 +197,14 @@ def assess(
         )
     if evidence.principal != request.principal or evidence.subject != request.subject:
         problems.append("issued to a different principal or agent")
+    # an authority that says whom it issued to has to name the principal the identity authority
+    # knows this agent as; one that says nothing about it is judged on the rest
+    if (
+        request.external_principal is not None
+        and evidence.external_principal is not None
+        and evidence.external_principal != request.external_principal
+    ):
+        problems.append("issued to a different external principal")
     if evidence.action_hash is not None and evidence.action_hash != request.action_hash:
         problems.append("bound to a different action")
     if evidence.call_id is not None and evidence.call_id != request.call_id:
@@ -320,6 +332,7 @@ class CredentialBroker:
         now: datetime,
         remember: Callable[[str], None],
         at_least: Assurance | None = None,
+        external_principal: str | None = None,
     ) -> Obtained:
         """Get and assess one credential. `remember` is called with any secret the authority
         hands over, before anything else is done with it, so it's scrubbed whatever happens."""
@@ -335,7 +348,14 @@ class CredentialBroker:
         issuer = self.authorities[mapping.authority]
         refused = Obtained(name, mapping.authority, None, required, issuer=issuer)
 
-        request = derive_request(mapping, action, grant, run_id=run_id, call_id=call_id)
+        request = derive_request(
+            mapping,
+            action,
+            grant,
+            run_id=run_id,
+            call_id=call_id,
+            external_principal=external_principal,
+        )
         if isinstance(request, str):
             refused.problems = (request,)
             return refused
@@ -353,6 +373,9 @@ class CredentialBroker:
             return refused
         secret = issued.secret
         remember(secret.reveal())
+        for part in issued.also_scrub if isinstance(issued.also_scrub, tuple) else ():
+            if isinstance(part, Secret):
+                remember(part.reveal())
         refused.issued = secret
         try:
             return self._assess(name, mapping, issuer, request, issued, required, seen, now)
@@ -380,8 +403,11 @@ class CredentialBroker:
         problems = list(result.problems)
         if result.evidence is not None:
             if ref is not None and ref != result.evidence.credential_ref:
+                # refused either way; the reference kept is the one handed over with the secret,
+                # so revoking it retires the credential Legion actually holds
                 problems.append("the credential's reference doesn't match its evidence")
-            ref = result.evidence.credential_ref
+            else:
+                ref = result.evidence.credential_ref
         got = Obtained(
             name,
             mapping.authority,
@@ -419,6 +445,8 @@ class CredentialBroker:
         try:
             async with asyncio.timeout(self.timeout_s):
                 status = await got.issuer.status(got.ref)
+        except UnknownCredential:
+            return UNKNOWN
         except Exception as exc:
             # unreachable is not "still active"
             return f"couldn't check it's still active: {type(exc).__name__}"

@@ -17,7 +17,12 @@ from pydantic import BaseModel
 from legion.access.secrets import Secret
 from legion.domain.action import EffectClass
 from legion.domain.errors import ToolRetryable
-from legion.ports.credentials import CredentialRequest, CredentialStatus, IssuedCredential
+from legion.ports.credentials import (
+    CredentialRequest,
+    CredentialStatus,
+    IssuedCredential,
+    UnknownCredential,
+)
 from legion.tools.base import ToolContext
 from legion.tools.native import tool
 
@@ -106,7 +111,9 @@ class LabAuthority:
             return None  # type: ignore[return-value]
         if credential_ref in self.revoked:
             return CredentialStatus.REVOKED
-        if credential_ref in self.expires and self.clock() >= self.expires[credential_ref]:
+        if credential_ref not in self.expires:
+            raise UnknownCredential(credential_ref)
+        if self.clock() >= self.expires[credential_ref]:
             return CredentialStatus.EXPIRED
         return CredentialStatus.ACTIVE
 

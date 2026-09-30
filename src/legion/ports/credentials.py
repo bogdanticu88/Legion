@@ -1,6 +1,7 @@
-# Port to whatever issues credentials for tool calls: NIA later, or anything else that can scope a
-# credential. Legion asks for exactly what an authorized Action needs and checks what comes back.
-# The authority issues and vouches for credentials; it never decides what Legion allows.
+# Port to whatever issues credentials for tool calls: anything that can scope a credential to one
+# call (an adapter in legion.adapters, or an operator module). Legion asks for exactly what an
+# authorized Action needs and checks what comes back. The authority issues and vouches for
+# credentials; it never decides what Legion allows.
 #
 # Three things that are easy to mix up and mustn't be:
 #   identity              who is acting (principal, agent, delegation chain)
@@ -67,12 +68,17 @@ class CredentialRequest:
     on_behalf_of: tuple[str, ...]
     run_id: str
     task_id: str
+    # Legion's own id for the call (events.projections.legion_call_id), never the model's or
+    # provider's tool call id: two identical calls differ here, retries of one call don't
     call_id: str
     action_hash: str
     grant_id: str
     grant_fingerprint: str
     tool: str
     max_lifetime_s: int
+    # The identity authority's id for the subject (AgentIdentity.external_id), when there is
+    # one. An authority that knows identities should issue to exactly this principal.
+    external_principal: str | None = None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -98,6 +104,8 @@ class CredentialEvidence(BaseModel):
     provider: _Text
     principal: _Text
     subject: _Text
+    # the authority's own id for who the credential was issued to, when it has one
+    external_principal: _Text | None = None
     permissions: tuple[Annotated[str, Field(min_length=1, max_length=200)], ...] = Field(
         max_length=64
     )
@@ -115,6 +123,11 @@ class CredentialEvidence(BaseModel):
     verified: bool = False
 
 
+class UnknownCredential(Exception):
+    """Raised by CredentialAuthority.status or revoke: the authority has no record of this
+    reference (or not one it will show this caller). Legion treats it as not active."""
+
+
 @dataclass(frozen=True)
 class IssuedCredential:
     secret: Secret
@@ -124,6 +137,9 @@ class IssuedCredential:
     # The authority's reference for it, outside the evidence so Legion can ask about it and
     # revoke it even when the evidence is unusable. Must match REF_PATTERN and the evidence.
     credential_ref: str | None = None
+    # Parts of the secret that are secret on their own and could turn up without the rest (the
+    # half after the reference in a "<ref>.<secret>" token, say). Scrubbed like the secret.
+    also_scrub: tuple[Secret, ...] = ()
 
     def __repr__(self) -> str:
         return "IssuedCredential(secret=Secret(****))"

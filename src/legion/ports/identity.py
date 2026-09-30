@@ -1,6 +1,6 @@
-# Port to an external identity/authorization service (NIA or MIA): who is acting, whether they
-# may, and whether they've been killed. Issuing credentials is a separate port
-# (ports/credentials.py). See ARCHITECTURE.md for how the methods map onto each.
+# Port to an external identity/authorization service: who is acting, whether they may, and
+# whether they've been killed. Issuing credentials is a separate port (ports/credentials.py).
+# Implementations live in legion.adapters and are only loaded when configured.
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ class IdentityPort(Protocol):
 
 
 class NullIdentityPort:
-    # default when no NIA/MIA is configured: never killed, never vetoes
+    # default when no identity service is configured: never killed, never vetoes
     source = "local"
 
     async def agent_identity(self, agent_ref: str) -> AgentIdentity:
