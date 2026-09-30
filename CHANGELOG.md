@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0a1 (not yet released)
+## 0.1.0a1 (2026-09-30)
 
 The first public alpha. Legion works and is extensively tested; it is not production software.
 

@@ -11,15 +11,16 @@ Most of these are settings on GitHub or PyPI, not changes in the repository:
 - [ ] **README links on PyPI.** The README's relative links (`docs/...`, `THREAT_MODEL.md`) don't
       resolve on a package index page; decide whether to make the important ones absolute before
       the first upload.
-- [ ] **Private vulnerability reporting** switched on (Settings, Code security), since
-      SECURITY.md sends reporters to it. Decide whether to add an email fallback and a default
-      disclosure window; SECURITY.md currently promises a reply within 5 working days and an
-      agreed disclosure date.
-- [ ] **A ruleset (or branch protection) on `main`:** pull requests required, force pushes and
-      deletion blocked, and required status checks: `check (3.12)`, `check (3.13)`, `audit`,
-      `base` and CodeQL's `analyze`.
-- [ ] **Dependabot alerts**, **secret scanning** and **push protection** switched on.
-- [ ] Labels used by the issue templates: `bug`, `proposal`; and `good first issue`.
+- [x] **Private vulnerability reporting** switched on (Settings, Code security), since
+      SECURITY.md sends reporters to it.
+- [ ] **Security contact.** Decide whether to add an email fallback and a default disclosure
+      window; SECURITY.md currently promises a reply within 5 working days and an agreed
+      disclosure date.
+- [x] **A ruleset on `main`:** force pushes and deletion blocked, and required status checks:
+      `check (3.12)`, `check (3.13)`, `audit`, `base` and CodeQL's `analyze`. Repository admins
+      can bypass it.
+- [x] **Dependabot alerts**, **secret scanning** and **push protection** switched on.
+- [x] Labels used by the issue templates: `bug`, `proposal`; and `good first issue`.
 
 ## Release checklist
 
@@ -50,7 +51,8 @@ Most of these are settings on GitHub or PyPI, not changes in the repository:
 7. Follow the README's quickstart in a fresh clone, as a stranger would, including the approval
    flow and `legion verify`.
 8. Maintainer approval to release.
-9. A signed tag, only after that approval: `git tag -s v0.1.0a1 -m "Legion 0.1.0a1"`. The tag is
+9. A tag, only after that approval: `git tag -s v0.1.0a1 -m "Legion 0.1.0a1"` (`-a` in place of
+   `-s` if no signing key is set up; 0.1.0a1 was tagged that way). The tag is
    `v` plus the version exactly as in `__init__.py` (PEP 440, so `0.1.0a1`, not `0.1.0-alpha.1`).
 10. Publishing to PyPI, only after approval, from the artifacts checked above. Trusted Publishing
     with attestations is the intended route once the repository is public.
