@@ -1,7 +1,7 @@
 [project]
 name = "legion-runtime"
-version = "0.1.0.dev0"
-description = "A small agent runtime where every effect passes one enforcement path and authority only narrows."
+dynamic = ["version"]
+description = "A small Python runtime between an LLM agent and its tools: the model decides what to try, Legion decides what runs."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -9,11 +9,16 @@ license-files = ["LICENSE"]
 authors = [{ name = "Mihai Bogdan Ticu" }]
 keywords = ["agents", "llm", "runtime", "harness", "capabilities", "security"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
 ]
+# [project.urls] goes here once the public repository exists (RELEASING.md)
 dependencies = [
     "pydantic>=2.7,<3",
     "httpx>=0.27,<1",
@@ -47,6 +52,10 @@ dev = [
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+# the one place the version is written; the package metadata is read from it at build time
+path = "src/legion/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/legion"]
 
@@ -57,7 +66,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: calls a real model endpoint; skipped unless the endpoint is configured",
-    "demo: the five demonstrations listed in docs/demos.md",
+    "demo: the demonstrations docs/demos.md says run as tests",
 ]
 addopts = "-m 'not integration'"
 
