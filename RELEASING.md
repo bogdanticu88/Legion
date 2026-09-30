@@ -5,21 +5,12 @@ or a PyPI upload only happens when the maintainer does it by hand.
 
 ## Before the first public release
 
-These can't be done from the repository and aren't done yet:
+Most of these are settings on GitHub or PyPI, not changes in the repository:
 
-- [ ] **Public repository URL.** Once the repository exists, add it to `pyproject.toml` in place
-      of the comment `# [project.urls] goes here once the public repository exists`:
-
-      ```toml
-      [project.urls]
-      Homepage = "<url>"
-      Repository = "<url>"
-      Issues = "<url>/issues"
-      Changelog = "<url>/blob/main/CHANGELOG.md"
-      ```
-
-      The README's relative links (`docs/...`, `THREAT_MODEL.md`) don't resolve on a package
-      index page; with the URL known, decide whether to make the important ones absolute.
+- [x] **Public repository URL** is in `pyproject.toml` under `[project.urls]`.
+- [ ] **README links on PyPI.** The README's relative links (`docs/...`, `THREAT_MODEL.md`) don't
+      resolve on a package index page; decide whether to make the important ones absolute before
+      the first upload.
 - [ ] **Private vulnerability reporting** switched on (Settings, Code security), since
       SECURITY.md sends reporters to it. Decide whether to add an email fallback and a default
       disclosure window; SECURITY.md currently promises a reply within 5 working days and an

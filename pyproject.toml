@@ -18,7 +18,6 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
-# [project.urls] goes here once the public repository exists (RELEASING.md)
 dependencies = [
     "pydantic>=2.7,<3",
     "httpx>=0.27,<1",
@@ -31,6 +30,12 @@ dependencies = [
 
 [project.scripts]
 legion = "legion.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/bogdanticu88/Legion"
+Repository = "https://github.com/bogdanticu88/Legion"
+Issues = "https://github.com/bogdanticu88/Legion/issues"
+Changelog = "https://github.com/bogdanticu88/Legion/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 mcp = [
