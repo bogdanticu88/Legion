@@ -2,6 +2,14 @@
   <img src="docs/assets/legion.jpg" alt="Legion: execution control for LLM agents" width="600">
 </p>
 
+<p align="center">
+  <a href="CHANGELOG.md"><img alt="alpha: v0.1.0a1" src="https://img.shields.io/badge/alpha-v0.1.0a1-c9a227?style=flat-square&labelColor=1a1a1a"></a>
+  <a href="https://github.com/bogdanticu88/Legion/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/bogdanticu88/Legion/ci.yml?branch=main&label=CI&style=flat-square&labelColor=1a1a1a"></a>
+  <img alt="Python 3.12 | 3.13" src="https://img.shields.io/badge/python-3.12%20%7C%203.13-c9a227?style=flat-square&labelColor=1a1a1a">
+  <a href="THREAT_MODEL.md"><img alt="threat model: documented" src="https://img.shields.io/badge/threat%20model-documented-c9a227?style=flat-square&labelColor=1a1a1a"></a>
+  <a href="LICENSE"><img alt="license: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-c9a227?style=flat-square&labelColor=1a1a1a"></a>
+</p>
+
 Legion is a small Python runtime that sits between an LLM agent and its tools. The model decides
 which tool calls it wants to make; Legion decides which of them run.
 
