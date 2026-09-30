@@ -3,7 +3,8 @@
 This is the contract Legion needs from a credential authority, written from Legion's security
 requirements (ADR 0019), not from what any authority does today. NIA is the intended reference
 implementation; the last sections compare it with NIA as inspected on 2026-09-29 (commit
-`e6802a1`). Nothing here is implemented in NIA, and Legion has no NIA adapter.
+`e6802a1`). Nothing here is implemented in NIA. Legion's NIA adapter (ADR 0020) uses NIA for identity and
+kill state only.
 
 Field classes used below:
 
@@ -142,6 +143,12 @@ An MCP server today holds one credential for the whole process. Per-call authori
 - server-side or gateway enforcement that checks the credential when it's used
 
 Until then Legion treats MCP credentials as `declared` or `unverified` (ADR 0019).
+
+## What's in use today
+
+Phase 5B.1 uses NIA for identity and kill state only, through `IdentityPort` and
+`GET /agents/{ref}` (ADR 0020). Legion's operator token needs only NIA's viewer role. None of
+the credential contract above is in use.
 
 ## NIA today against this contract
 

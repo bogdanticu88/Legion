@@ -90,7 +90,7 @@ and decimals as strings.
 | `action.proposed` | `call_id`, `tool`, `arguments`, `action_hash`, `effect`, `resource`, `required`, `remote` | the call passed lookup and schema checks. `remote` is null for native tools; for MCP it has `kind`, `server`, `server_fingerprint`, `remote_tool`, `pin`, `credential_scope`, `credential_assurance` (`declared` if a scope was written, otherwise `unverified`) and, if the identity service reported one, `credential_evidence` (`source`, `subject`, `scopes`, `claimed_verified`) |
 | `action.refused` | `call_id`, `tool`, `action_hash`, `reason_code`, `message` | the model gets `message`. `action_hash` is null if the call was refused before it became an Action |
 | `action.repeated` | `call_id`, `tool`, `repeat_key`, `count` | third or later identical call |
-| `action.authorized` | `call_id`, `action_hash`, `reasons` | grant, policy and external check all passed |
+| `action.authorized` | `call_id`, `action_hash`, `reasons`, `external` | grant, policy and external check all passed. `external` is what an external identity authority based its decision on (for NIA: `provider`, `ref`, `state`, `checked_at`), null without one |
 | `action.in_doubt` | `call_id`, `action_hash`, `effect`, `reason` | started, outcome unknown |
 | `tool.started` | `call_id`, `action_hash`, `attempt` | |
 | `tool.completed` | `call_id`, `action_hash`, `content`, `is_error`, `artifact`, `truncated`, `redactions`, `latency_ms` | `content` is exactly what the model sees |
@@ -126,7 +126,7 @@ Refusals: `unknown_tool`, `tool_not_offered`, `invalid_arguments`, `capability_d
 Pausing (`disposition: escalate`): `approval_required`, `action_in_doubt`.
 
 Fatal: `config_error`, `no_model_binding`, `budget_exceeded`, `deadline_exceeded`, `killed`,
-`loop_detected`, `credential_unavailable`, `grant_expired`, `abandoned`,
+`loop_detected`, `credential_unavailable`, `identity_unknown`, `identity_unavailable`, `grant_expired`, `abandoned`,
 `model_auth_error`, `model_request_rejected`, `context_exhausted`, `final_output_invalid`,
 `invalid_transition`, `concurrent_append`, `internal_error`, `resume_refused` (for example a
 child whose model binding changed before a resume).

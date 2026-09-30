@@ -256,6 +256,8 @@ can rewrite it or add to it. The log is tamper-evident against edits, not tamper
   moment the downstream system uses the credential. A revocation or kill in between isn't seen
   until the next check, and a call that already started isn't undone.
 - MCP credentials aren't issued per call; an MCP call is never more than `declared`.
+- With NIA configured, Legion trusts NIA's answers about identity and kill state, and they aren't
+  signed. A kill in NIA stops the agent at Legion's next check, not a call already under way.
 - A child's wall time is only recorded when it ends, so a child that pauses or crashes gets its
   full time again each stretch (still inside the root's time limit).
 - Approvers are whoever runs the CLI as the local OS user. Nothing is signed, and there's no
@@ -309,8 +311,10 @@ memory that remembers where facts came from, and exports plus the NIA identity a
 ## Related projects
 
 NIA is my Go control plane for agent identity, credentials and kill switches. MIA is a Python
-service for delegated mandates. Legion can talk to either through `IdentityPort` (later) but needs
-neither.
+service for delegated mandates. Legion needs neither. With an `identity:` block in `legion.yaml`,
+Legion takes identity and kill state from NIA (ADR 0020): each Legion agent is mapped to a NIA
+ref, a killed agent can't start another action, and if NIA can't be asked or its answer can't be
+confirmed, nothing runs. NIA isn't used for credentials yet.
 
 The distribution name is `legion-runtime`; the import is `legion` and the command is `legion`.
 Nothing is published on PyPI yet, so install from this repository (`uv sync`, or `pip install .`).

@@ -16,6 +16,13 @@ LEGION_TEST_OPENAI_COMPAT_URL=http://localhost:11434/v1 LEGION_TEST_OPENAI_COMPA
 ANTHROPIC_API_KEY=... LEGION_TEST_ANTHROPIC_MODEL=claude-sonnet-5-5 uv run pytest -m integration
 ```
 
+The NIA integration test needs a built NIA control plane:
+
+```bash
+(cd ../nia && go build -o /tmp/nia-api ./cmd/api)
+LEGION_TEST_NIA_BIN=/tmp/nia-api uv run pytest -m integration tests/integration/test_nia_real.py
+```
+
 ## Before a pull request
 
 - `uv run ruff check src tests`, `uv run ruff format --check src tests` and `uv run mypy` pass.

@@ -158,7 +158,8 @@ These are three separate pieces:
 - `ModelProvider` speaks one wire format: OpenAI-compatible, Anthropic, or scripted for tests.
 - `AccessProvider` handles authentication. Right now that's none (local) or an API key. Gateways,
   workload identity and OAuth aren't built. A provider that gets an API key needs an https URL
-  (plain http only to localhost), and URLs can't carry a username or password.
+  (plain http only to 127.0.0.1 or [::1], not the name `localhost`), and URLs can't carry a
+  username or password.
 - `ModelResolver` maps what the agent asks for (e.g. `general/default` with tools) to a configured
   binding. If nothing fits, the run doesn't start. A binding's features are what the operator
   declares, limited to what the adapter implements.
@@ -218,20 +219,23 @@ Legion only enforces inside a single run. Identity, issuing credentials, per-age
 switches and risk across runs belong to an external service reached through `IdentityPort`. The
 default `NullIdentityPort` never kills and never vetoes.
 
-| Method | NIA | MIA |
+| Method | NIA today (ADR 0020) | MIA |
 |---|---|---|
-| `kill_state(identity)` | kill sentinel, revoked credential | mandate revoked or suspect |
-| `authorize(action, identity)` | gateway decision | `authz.authorize` |
-| `credential(agent_ref, purpose)` | `POST /agents/{ref}/credentials` | token exchange |
-| `on_delegation(parent, child)` | register the child with a subset of grants | `mandates.delegate` |
-| `evidence(action_hash)` | incidents, audit | audit |
-| `credential_evidence(server)` | a claim about the credential an MCP server holds | - |
+| `agent_identity(name)` | mapped ref, looked up with `GET /agents/{ref}` | mandate subject |
+| `kill_state(identity)` | `effective_state` with a confirmed live kill check | mandate revoked or suspect |
+| `authorize(action, identity)` | identity state only; NIA has no per-action decision for Legion | `authz.authorize` |
+| `on_delegation(parent, child)` | both mapped and active, or refused; NIA records nothing | `mandates.delegate` |
+| `evidence(action_hash)` | nothing | audit |
+| `credential_evidence(server)` | nothing | - |
 
 An action runs only if both Legion's grant and the external service allow it. The kill check
 covers the task's own identity and every ancestor's, so killing an agent stops everything it
-delegated to. NIA can also sit in
-front of the tools as a gateway (`POST /tools/{tool}/call` or `/mcp`), which means someone who gets
-around Legion still has to get past NIA. For now only the interface and the null version exist.
+delegated to.
+
+`legion.adapters.nia` is the NIA adapter, configured under `identity:` in `legion.yaml` with an
+explicit map from Legion agent names to NIA refs. It talks to NIA's control plane over HTTP only,
+fails closed on anything it can't confirm, and isn't imported by the kernel. NIA isn't used as a
+credential authority, and its gateway isn't in front of Legion's tools; both are later phases.
 
 ## Failures
 

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Phase 5B.1
+
+- NIA as identity authority: `legion.adapters.nia.NiaIdentityPort`, configured under `identity:`
+  in `legion.yaml` with an explicit map from Legion agent names to NIA refs. It asks NIA's
+  `GET /agents/{ref}` for identity and kill state, before model calls, tool calls and dispatch
+  and after a resume, and fails closed (`identity_unknown`, `identity_unavailable`) on anything it
+  can't confirm. Children need their own mapped, active identity.
+- `action.authorized.external` records the external decision (provider, ref, state, time).
+- Endpoints that get credentials over plain http must name a literal loopback address (127.0.0.1
+  or [::1]); the name `localhost` is refused, since it can reach a different listener than meant.
+  This applies to model providers with an API key and MCP servers too.
+- A stand-in NIA for tests (`tests/nia_lab.py`) and an integration test against a real `nia-api`
+  (`LEGION_TEST_NIA_BIN`). No NIA changes; NIA isn't used for credentials.
+
 ### Phase 5A
 
 - A `CredentialAuthority` port, separate from `IdentityPort`, issues a credential per call from

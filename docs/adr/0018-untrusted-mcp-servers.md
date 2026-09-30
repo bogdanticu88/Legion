@@ -161,7 +161,7 @@ Tools only. Resources and prompts aren't used: a prompt is server-written text m
 model's instructions, and resources would need their own read capabilities and limits. Sampling,
 roots and logging are deprecated in the spec and not supported. Stdio server stderr goes to
 `.legion/mcp/<server>.stderr.log` (mode 0600, not scrubbed) instead of the operator's terminal.
-Remote `http` servers need `https`; plain `http` is allowed only for localhost, and URLs can't
+Remote `http` servers need `https`; plain `http` is allowed only to 127.0.0.1 or [::1], and URLs can't
 carry a username or password. A stdio server's `cwd` is relative to `legion.yaml`, and its
 env and header secrets are scrubbed from events and tool output like any other secret.
 
